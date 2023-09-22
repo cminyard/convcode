@@ -28,7 +28,7 @@ void reinit_convcode(struct convcode *ce);
  * Allocate a convolutional coder for coding or decoding.
  *
  * k is the constraint (the size of the polynomials in bits).  The
- * maximum value is 15.
+ * maximum value is 16,
  *
  * The polynomials are givin in the array.  They are coded where the
  * low bit handles the first bit fed into the state machine.  This

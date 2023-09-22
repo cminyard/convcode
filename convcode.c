@@ -32,19 +32,39 @@ struct convcode {
     /* Total number of output bits we have generated. */
     unsigned int total_out_bits;
 
-    /* For the given state, what is the output? */
+    /* For the given state, what is the encoded output? */
     uint16_t *convert;
     unsigned int convert_size;
 
+    /*
+     * Number of states in the state machine, 1 << (k - 1).
+     */
     unsigned int num_states;
 
+    /*
+     * The bit trellis matrix.  The first array is an array of
+     * pointers to arrays of uint16_t, one for each possible output
+     * bit on decoding.  It is trellis_size elements.  Each array in
+     * that is individually allocated and contains the state for a
+     * specific input.  Each is num_states elements.
+     */
     uint16_t **trellis;
     unsigned int trellis_size;
     unsigned int ctrellis; /* Current trellis value */
 
+    /*
+     * You don't need the whole path value matrix, you only need the
+     * previous one and the next one (the one you are working on).
+     * Each of these is num_states elements.
+     */
     unsigned int *curr_path_values;
     unsigned int *next_path_values;
 
+    /*
+     * When reading bits for decoding, there may be some left over if
+     * there weren't enough bits for the whole operation.  Store those
+     * here for use in the next decode call.
+     */
     unsigned int leftover_bits;
     unsigned char leftover_bits_data;
 
