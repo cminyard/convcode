@@ -9,6 +9,7 @@ To avoid others having the same problem, I've uploaded mine.
 
 The API is descrdibed in the convcode.h file.
 
-You can edit convcode.c, search for "Test code", enable the ifdef
-above it, and compile it to enable the tests and a main() function to
-do basic operations.  Docs are right there in the file.
+Compile with -DCONVCODE_TESTS to enable tests and a main().  Search
+for "Test code" in convcode.c for details on how to use it.  Compiling
+with "make" here will compile with that enabled, "make check" will run
+the tests.
