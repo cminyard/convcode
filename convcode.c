@@ -453,13 +453,13 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  *
  * For instance, to decode some data with the Voyager coder, do:
  *
- * $ ./convcode -p 0171 -p 0133 -x 7 00110011
+ * $ ./convcode -p 0171 -p 0133 7 00110011
  *   0000111010000000111111100111
  *   bits = 28
  *
  * To then decode that data, do:
  *
- * $ ./convcode -p 0171 -p 0133 -x -d 7 0000111010000000111111100111
+ * $ ./convcode -p 0171 -p 0133 -d 7 0000111010000000111111100111
  *   00110011
  *   errors = 0
  *   bits = 8
