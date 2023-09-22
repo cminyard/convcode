@@ -18,8 +18,6 @@ struct convcode {
     uint16_t *polys;
     unsigned int num_polys;
 
-    bool do_tail;
-
     /* Current state. */
     uint16_t state;
     uint16_t state_mask;
@@ -133,7 +131,6 @@ struct convcode *
 alloc_convcode(unsigned int k, uint16_t *polynomials,
 	       unsigned int num_polynomials,
 	       unsigned int max_decode_len_bits,
-	       bool do_tail,
 	       int (*output)(struct convcode *ce, void *output_data,
 			     unsigned char byte, unsigned int nbits),
 	       void *output_data)
@@ -149,7 +146,6 @@ alloc_convcode(unsigned int k, uint16_t *polynomials,
     ce->output = output;
     ce->output_data = output_data;
     ce->state_mask = (1 << k) - 1;
-    ce->do_tail = do_tail;
 
     ce->polys = malloc(sizeof(*ce->polys) * num_polynomials);
     if (!ce->polys)
@@ -260,12 +256,10 @@ convencode_finish(struct convcode *ce, unsigned int *total_out_bits)
     unsigned int i;
     int rv;
 
-    if (ce->do_tail) {
-	for (i = 0; i < ce->k - 1; i++) {
-	    rv = encode_bit(ce, 0);
-	    if (rv)
-		return rv;
-	}
+    for (i = 0; i < ce->k - 1; i++) {
+	rv = encode_bit(ce, 0);
+	if (rv)
+	    return rv;
     }
     if (ce->out_bit_pos > 0)
 	ce->output(ce, ce->output_data, ce->out_bits, ce->out_bit_pos);
@@ -407,7 +401,7 @@ int
 convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 		  unsigned int *num_errs)
 {
-    unsigned int i, extra_bits = 0;
+    unsigned int i;
     unsigned int min_val = ce->curr_path_values[0], min_pos = 0;
 
     for (i = 1; i < ce->num_states; i++) {
@@ -430,9 +424,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 	min_pos = pstate;
     }
 
-    if (ce->do_tail)
-	extra_bits = ce->k - 1;
-    for (i = 0; i < ce->ctrellis - extra_bits; i++) {
+    for (i = 0; i < ce->ctrellis - (ce->k - 1); i++) {
 	int rv = output_bits(ce, ce->trellis[i][0], 1);
 	if (rv)
 	    return rv;
@@ -446,7 +438,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
     return 0;
 }
 
-#if 0
+#ifdef CONVCODE_TESTS
 
 /*
  * Test code.
@@ -455,22 +447,19 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  *
  * To supply your own input and output, run as:
  *
- * ./cmd [-t] [-x] -p <poly1> [ -p <poly2> ... ] k <bits>
+ * ./convcode [-t] -p <poly1> [ -p <poly2> ... ] k <bits>
  *
- * where bits is a sequence of 0 or 1.  The -x option enables the
- * "tail" of the encoder and expects the tail in the decoder.  (see
- * the convcode.h file about do_tail).  -x works with -t to run the
- * tests that way.  Otherwise, no other options have an effect with -t.
+ * where bits is a sequence of 0 or 1.
  *
  * For instance, to decode some data with the Voyager coder, do:
  *
- * $ ./cmd -p 0171 -p 0133 -x 7 00110011
+ * $ ./convcode -p 0171 -p 0133 -x 7 00110011
  *   0000111010000000111111100111
  *   bits = 28
  *
  * To then decode that data, do:
  *
- * $ ./cmd -p 0171 -p 0133 -x -d 7 0000111010000000111111100111
+ * $ ./convcode -p 0171 -p 0133 -x -d 7 0000111010000000111111100111
  *   00110011
  *   errors = 0
  *   bits = 8
@@ -567,12 +556,12 @@ handle_test_output(struct convcode *ce, void *output_data, unsigned char byte,
 }
 
 static unsigned int
-run_test(unsigned int k, uint16_t *polys, unsigned int npolys, bool do_tail,
+run_test(unsigned int k, uint16_t *polys, unsigned int npolys,
 	 const char *encoded, const char *decoded,
 	 unsigned int expected_errs)
 {
     struct test_data t;
-    struct convcode *ce = alloc_convcode(k, polys, npolys, 128, do_tail,
+    struct convcode *ce = alloc_convcode(k, polys, npolys, 128,
 					 handle_test_output, &t);
     unsigned int i, total_bits, num_errs, rv = 0;
 
@@ -621,11 +610,10 @@ run_test(unsigned int k, uint16_t *polys, unsigned int npolys, bool do_tail,
 }
 
 static unsigned int
-rand_test(unsigned int k, uint16_t *polys, unsigned int npolys,
-	  bool do_tail)
+rand_test(unsigned int k, uint16_t *polys, unsigned int npolys)
 {
     struct test_data t;
-    struct convcode *ce = alloc_convcode(k, polys, npolys, 128, do_tail,
+    struct convcode *ce = alloc_convcode(k, polys, npolys, 128,
 					 handle_test_output, &t);
     unsigned int i, j, bit, total_bits, num_errs, rv = 0;
     char decoded[33];
@@ -662,87 +650,57 @@ rand_test(unsigned int k, uint16_t *polys, unsigned int npolys,
 }
 
 static int
-run_tests(bool do_tail)
+run_tests(void)
 {
     unsigned int errs = 0;
     srand(time(NULL));
 
     {
 	uint16_t polys[2] = { 5, 7 };
-	if (do_tail) {
-	    errs += run_test(3, polys, 2, do_tail,
-			     "0011100001100111111000101100111011",
-			     "010111001010001", 0);
-	    errs += run_test(3, polys, 2, do_tail,
-			     "0011100001100111110000101100111011",
-			     "010111001010001", 1);
-	} else {
-	    errs += run_test(3, polys, 2, do_tail,
-			     "001110000110011111100010110011",
-			     "010111001010001", 0);
-	    errs += run_test(3, polys, 2, do_tail,
-			     "001110000110011111000010110011",
-			     "010111001010001", 1);
-	}
-	errs += rand_test(3, polys, 2, do_tail);
+	errs += run_test(3, polys, 2,
+			 "0011100001100111111000101100111011",
+			 "010111001010001", 0);
+	errs += run_test(3, polys, 2,
+			 "0011100001100111110000101100111011",
+			 "010111001010001", 1);
+	errs += rand_test(3, polys, 2);
     }
     {
 	uint16_t polys[2] = { 3, 7 };
-	if (do_tail) {
-	    errs += run_test(3, polys, 2, do_tail,
-			     "1011010100110000", "101100", 0);
-	} else {
-	    errs += run_test(3, polys, 2, do_tail,
-			     "101101010011", "101100", 0);
-	}
-	errs += rand_test(3, polys, 2, do_tail);
+	errs += run_test(3, polys, 2,
+			 "1011010100110000", "101100", 0);
+	errs += rand_test(3, polys, 2);
     }
     {
 	uint16_t polys[2] = { 5, 3 };
-	if (do_tail) {
-	    errs += run_test(3, polys, 2, do_tail,
-			     "011011011101101011", "1001101", 0);
-	    errs += run_test(3, polys, 2, do_tail,
-			     "111011011100101011", "1001101", 2);
-	} else {
-	    errs += run_test(3, polys, 2, do_tail,
-			     "01101101110110", "1001101", 0);
-	    errs += run_test(3, polys, 2, do_tail,
-			     "11101101110010", "1001101", 2);
-	}
-	errs += rand_test(3, polys, 2, do_tail);
+	errs += run_test(3, polys, 2,
+			 "011011011101101011", "1001101", 0);
+	errs += run_test(3, polys, 2,
+			 "111011011100101011", "1001101", 2);
+	errs += rand_test(3, polys, 2);
     }
     { /* Voyager */
 	uint16_t polys[2] = { 0171, 0133 };
-	errs += rand_test(7, polys, 2, do_tail);
+	errs += rand_test(7, polys, 2);
     }
     { /* LTE */
 	uint16_t polys[3] = { 0117, 0127, 0155 };
-	if (do_tail) {
-	    errs += run_test(7, polys, 3, do_tail,
-			     "111100101110001011110101111111001011100111",
-			     "10110111", 0);
-	    errs += run_test(7, polys, 3, do_tail,
-			     "100100101110001011110101110111001011100110",
-			     "10110111", 4);
-	} else {
-	    errs += run_test(7, polys, 3, do_tail,
-			     "111100101110001011110101",
-			     "10110111", 0);
-	    errs += run_test(7, polys, 3, do_tail,
-			     "100100101010001010110101",
-			     "10110111", 4);
-	}
-	errs += rand_test(7, polys, 3, do_tail);
+	errs += run_test(7, polys, 3,
+			 "111100101110001011110101111111001011100111",
+			 "10110111", 0);
+	errs += run_test(7, polys, 3,
+			 "100100101110001011110101110111001011100110",
+			 "10110111", 4);
+	errs += rand_test(7, polys, 3);
     }
     { /* CDMA 2000 */
 	uint16_t polys[4] = { 0671, 0645, 0473, 0537 };
-	errs += rand_test(9, polys, 4, do_tail);
+	errs += rand_test(9, polys, 4);
     }
     { /* Cassini / Mars Pathfinder */
 	uint16_t polys[7] = { 074000, 046321, 051271, 070535,
 	    063667, 073277, 076513 };
-	errs += rand_test(15, polys, 7, do_tail);
+	errs += rand_test(15, polys, 7);
     }
 
     printf("%u errors\n", errs);
@@ -757,7 +715,7 @@ main(int argc, char *argv[])
     unsigned int k;
     struct convcode *ce;
     unsigned int arg, total_bits, num_errs = 0;
-    bool decode = false, test = false, do_tail = false;
+    bool decode = false, test = false;
 
     for (arg = 1; arg < argc; arg++) {
 	if (argv[arg][0] != '-')
@@ -766,8 +724,7 @@ main(int argc, char *argv[])
 	    decode = true;
 	} else if (strcmp(argv[arg], "-t") == 0) {
 	    test = true;
-	} else if (strcmp(argv[arg], "-x") == 0) {
-	    do_tail = true;
+
 	} else if (strcmp(argv[arg], "-p") == 0) {
 	    if (num_polys == 16) {
 		fprintf(stderr, "Too many polynomials\n");
@@ -786,7 +743,7 @@ main(int argc, char *argv[])
     }
 
     if (test)
-	return run_tests(do_tail);
+	return run_tests();
 
     if (num_polys == 0) {
 	fprintf(stderr, "No polynomials (-p) given\n");
@@ -804,8 +761,7 @@ main(int argc, char *argv[])
 	return 1;
     }
 
-    ce = alloc_convcode(k, polys, num_polys, 128, do_tail,
-			handle_output, NULL);
+    ce = alloc_convcode(k, polys, num_polys, 128, handle_output, NULL);
 
     if (arg >= argc) {
 	fprintf(stderr, "No data given\n");

@@ -50,7 +50,6 @@ void reinit_convcode(struct convcode *ce);
 struct convcode *alloc_convcode(unsigned int k, uint16_t *polynomials,
 				unsigned int num_polynomials,
 				unsigned int max_decode_len_bits,
-				bool do_tail,
 				int (*output)(struct convcode *ce,
 					      void *output_data,
 					      unsigned char byte,
