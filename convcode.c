@@ -24,14 +24,22 @@ get_trellis_column(struct convcode *ce, unsigned int column)
 #define trellis_entry(ce, column, row) get_trellis_column(ce, column)[row]
 
 void
-reinit_convcode(struct convcode *ce)
+reinit_convencode(struct convcode *ce)
+{
+    ce->enc_state = 0;
+    ce->enc_out.out_bits = 0;
+    ce->enc_out.out_bit_pos = 0;
+    ce->enc_out.total_out_bits = 0;
+}
+
+void
+reinit_convdecode(struct convcode *ce)
 {
     unsigned int i;
 
-    ce->state = 0;
-    ce->out_bits = 0;
-    ce->out_bit_pos = 0;
-    ce->total_out_bits = 0;
+    ce->dec_out.out_bits = 0;
+    ce->dec_out.out_bit_pos = 0;
+    ce->dec_out.total_out_bits = 0;
 
     if (ce->num_states > 0) {
 	ce->curr_path_values[0] = 0;
@@ -40,6 +48,13 @@ reinit_convcode(struct convcode *ce)
 	ce->ctrellis = 0;
     }
     ce->leftover_bits = 0;
+}
+
+void
+reinit_convcode(struct convcode *ce)
+{
+    reinit_convencode(ce);
+    reinit_convdecode(ce);
 }
 
 static unsigned int
@@ -126,9 +141,8 @@ struct convcode *
 alloc_convcode(unsigned int k, uint16_t *polynomials,
 	       unsigned int num_polynomials,
 	       unsigned int max_decode_len_bits,
-	       int (*output)(struct convcode *ce, void *output_data,
-			     unsigned char byte, unsigned int nbits),
-	       void *output_data)
+	       convcode_output enc_output, void *enc_out_user_data,
+	       convcode_output dec_output, void *dec_out_user_data)
 {
     struct convcode *ce;
 
@@ -141,8 +155,10 @@ alloc_convcode(unsigned int k, uint16_t *polynomials,
 	return NULL;
     }
 
-    ce->output = output;
-    ce->output_data = output_data;
+    ce->enc_out.output = enc_output;
+    ce->enc_out.user_data = enc_out_user_data;
+    ce->dec_out.output = dec_output;
+    ce->dec_out.user_data = dec_out_user_data;
 
     ce->convert = malloc(sizeof(*ce->convert) * ce->convert_size);
     if (!ce->convert)
@@ -176,34 +192,36 @@ alloc_convcode(unsigned int k, uint16_t *polynomials,
 }
 
 static int
-output_bits(struct convcode *ce, unsigned int bits, unsigned int len)
+output_bits(struct convcode *ce, struct convcode_outdata *of,
+	    unsigned int bits, unsigned int len)
 {
     int rv = 0;
 
-    ce->out_bits |= bits << ce->out_bit_pos;
-    while (ce->out_bit_pos + len >= 8) {
-	unsigned int used = 8 - ce->out_bit_pos;
+    of->out_bits |= bits << of->out_bit_pos;
+    while (of->out_bit_pos + len >= 8) {
+	unsigned int used = 8 - of->out_bit_pos;
 
-	rv = ce->output(ce, ce->output_data, ce->out_bits, 8);
+	rv = of->output(ce, of->user_data, of->out_bits, 8);
 	if (rv)
 	    return rv;
 
-	ce->total_out_bits += used;
+	of->total_out_bits += used;
 	bits >>= used;
 	len -= used;
-	ce->out_bit_pos = 0;
-	ce->out_bits = bits;
+	of->out_bit_pos = 0;
+	of->out_bits = bits;
     }
-    ce->out_bit_pos += len;
-    ce->total_out_bits += len;
+    of->out_bit_pos += len;
+    of->total_out_bits += len;
     return rv;
 }
 
 static int
 encode_bit(struct convcode *ce, unsigned int bit)
 {
-    ce->state = ((ce->state << 1) | bit) & ce->state_mask;
-    return output_bits(ce, ce->convert[ce->state], ce->num_polys);
+    ce->enc_state = ((ce->enc_state << 1) | bit) & ce->state_mask;
+    return output_bits(ce, &ce->enc_out,
+		       ce->convert[ce->enc_state], ce->num_polys);
 }
 
 int
@@ -237,10 +255,11 @@ convencode_finish(struct convcode *ce, unsigned int *total_out_bits)
 	if (rv)
 	    return rv;
     }
-    if (ce->out_bit_pos > 0)
-	ce->output(ce, ce->output_data, ce->out_bits, ce->out_bit_pos);
+    if (ce->enc_out.out_bit_pos > 0)
+	ce->enc_out.output(ce, ce->enc_out.user_data,
+			   ce->enc_out.out_bits, ce->enc_out.out_bit_pos);
     if (total_out_bits)
-	*total_out_bits = ce->total_out_bits;
+	*total_out_bits = ce->enc_out.total_out_bits;
     return 0;
 }
 
@@ -277,6 +296,11 @@ decode_bits(struct convcode *ce, unsigned int bits)
 	uint16_t pstate1 = i, pstate2;
 	unsigned int dist1, dist2;
 
+	/*
+	 * This state could have come from two different states, one
+	 * with the top bit set (pstate2) and with with the top bit
+	 * clear (pstate1).  We check both of those.
+	 */
 	pstate2 = i | (1 << (ce->k - 1));
 
 	dist1 = currp[pstate1 >> 1];
@@ -401,16 +425,17 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
     }
 
     for (i = 0; i < ce->ctrellis - (ce->k - 1); i++) {
-	int rv = output_bits(ce, trellis_entry(ce, i, 0), 1);
+	int rv = output_bits(ce, &ce->dec_out, trellis_entry(ce, i, 0), 1);
 	if (rv)
 	    return rv;
     }
-    if (ce->out_bit_pos > 0)
-	ce->output(ce, ce->output_data, ce->out_bits, ce->out_bit_pos);
+    if (ce->dec_out.out_bit_pos > 0)
+	ce->dec_out.output(ce, ce->dec_out.user_data,
+			   ce->dec_out.out_bits, ce->dec_out.out_bit_pos);
     if (num_errs)
 	*num_errs = min_val;
     if (total_out_bits)
-	*total_out_bits = ce->total_out_bits;
+	*total_out_bits = ce->dec_out.total_out_bits;
     return 0;
 }
 
@@ -538,6 +563,7 @@ run_test(unsigned int k, uint16_t *polys, unsigned int npolys,
 {
     struct test_data t;
     struct convcode *ce = alloc_convcode(k, polys, npolys, 128,
+					 handle_test_output, &t,
 					 handle_test_output, &t);
     unsigned int i, total_bits, num_errs, rv = 0;
 
@@ -561,7 +587,6 @@ run_test(unsigned int k, uint16_t *polys, unsigned int npolys,
 	    rv++;
 	}
 	t.outpos = 0;
-	reinit_convcode(ce);
     }
     do_decode_data(ce, encoded, &total_bits, &num_errs);
     t.output[t.outpos] = '\0';
@@ -590,6 +615,7 @@ rand_test(unsigned int k, uint16_t *polys, unsigned int npolys)
 {
     struct test_data t;
     struct convcode *ce = alloc_convcode(k, polys, npolys, 128,
+					 handle_test_output, &t,
 					 handle_test_output, &t);
     unsigned int i, j, bit, total_bits, num_errs, rv = 0;
     char decoded[33];
@@ -611,7 +637,6 @@ rand_test(unsigned int k, uint16_t *polys, unsigned int npolys)
 	    memcpy(encoded, t.output, t.outpos);
 	    encoded[t.outpos] = '\0';
 	    t.outpos = 0;
-	    reinit_convcode(ce);
 	    do_decode_data(ce, encoded, &total_bits, &num_errs);
 	    t.output[t.outpos] = '\0';
 	    if (strcmp(t.output, decoded) != 0) {
@@ -737,7 +762,9 @@ main(int argc, char *argv[])
 	return 1;
     }
 
-    ce = alloc_convcode(k, polys, num_polys, 128, handle_output, NULL);
+    ce = alloc_convcode(k, polys, num_polys, 128,
+			handle_output, NULL,
+			handle_output, NULL);
 
     if (arg >= argc) {
 	fprintf(stderr, "No data given\n");
