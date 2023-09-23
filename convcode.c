@@ -44,7 +44,11 @@ reinit_convdecode(struct convcode *ce)
     if (ce->num_states > 0) {
 	ce->curr_path_values[0] = 0;
 	for (i = 1; i < ce->num_states; i++)
-	    ce->curr_path_values[i] = UINT_MAX;
+	    /*
+	     * The "/ 2" lets us not have to check for UINT_MAX when
+	     * using.  Otherwise adding to UINT_MAX would overflow.
+	     */
+	    ce->curr_path_values[i] = UINT_MAX / 2;
 	ce->ctrellis = 0;
     }
     ce->leftover_bits = 0;
@@ -304,11 +308,9 @@ decode_bits(struct convcode *ce, unsigned int bits)
 	pstate2 = i | (1 << (ce->k - 1));
 
 	dist1 = currp[pstate1 >> 1];
-	if (dist1 != UINT_MAX)
-	    dist1 += hamming_distance(ce->convert[pstate1], bits);
+	dist1 += hamming_distance(ce->convert[pstate1], bits);
 	dist2 = currp[pstate2 >> 1];
-	if (dist2 != UINT_MAX)
-	    dist2 += hamming_distance(ce->convert[pstate2], bits);
+	dist2 += hamming_distance(ce->convert[pstate2], bits);
 
 	if (dist2 < dist1) {
 	    trellis_entry(ce, ce->ctrellis, i) = pstate2 >> 1;
