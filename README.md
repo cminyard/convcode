@@ -7,7 +7,7 @@ write one.
 
 To avoid others having the same problem, I've uploaded mine.
 
-The API is descrdibed in the convcode.h file.
+The API is described in the convcode.h file.
 
 Compile with -DCONVCODE_TESTS to enable tests and a main().  Search
 for "Test code" in convcode.c for details on how to use it.  Compiling
@@ -17,4 +17,4 @@ the tests.
 You can use this and do your own allocation, if you like.  See the
 discussion at the end of convcode.h for details.  It is recommended
 that you use alloc_convcode, though, unless you really need to do your
-own alloation.
+own allocation.

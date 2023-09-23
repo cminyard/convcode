@@ -31,7 +31,7 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  * k is the constraint (the size of the polynomials in bits).  The
  * maximum value is 16,
  *
- * The polynomials are givin in the array.  They are coded where the
+ * The polynomials are given in the array.  They are coded where the
  * low bit handles the first bit fed into the state machine.  This
  * seems to be the standard used, but may be backwards from what you
  * expect.  There may be up to 16 polynomials.
