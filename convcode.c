@@ -10,72 +10,18 @@
 
 #include "convcode.h"
 
-struct convcode {
-    /* The constraint, or polynomial size in bits.  Max is 16. */
-    unsigned int k;
+/*
+ * The trellis is a two-dimensional matrix, but the size is dynamic
+ * based upon how it is created.  So we use a one-dimensional matrix
+ * and do our own indexing with the below two functions/macros.
+ */
+static uint16_t *
+get_trellis_column(struct convcode *ce, unsigned int column)
+{
+    return ce->trellis + column * ce->num_states * sizeof(*ce->trellis);
+}
 
-    /* Polynomials. */
-    uint16_t *polys;
-    unsigned int num_polys;
-
-    /* Current state. */
-    uint16_t state;
-    uint16_t state_mask;
-
-    /*
-     * Output bit processing.  Bits are collected in out_bits until we
-     * get 8, then we send it to the output.
-     */
-    unsigned char out_bits;
-    unsigned int out_bit_pos;
-
-    /* Total number of output bits we have generated. */
-    unsigned int total_out_bits;
-
-    /* For the given state, what is the encoded output? */
-    uint16_t *convert;
-    unsigned int convert_size;
-
-    /*
-     * Number of states in the state machine, 1 << (k - 1).
-     */
-    unsigned int num_states;
-
-    /*
-     * The bit trellis matrix.  The first array is an array of
-     * pointers to arrays of uint16_t, one for each possible output
-     * bit on decoding.  It is trellis_size elements.  Each array in
-     * that is individually allocated and contains the state for a
-     * specific input.  Each is num_states elements.
-     */
-    uint16_t **trellis;
-    unsigned int trellis_size;
-    unsigned int ctrellis; /* Current trellis value */
-
-    /*
-     * You don't need the whole path value matrix, you only need the
-     * previous one and the next one (the one you are working on).
-     * Each of these is num_states elements.
-     */
-    unsigned int *curr_path_values;
-    unsigned int *next_path_values;
-
-    /*
-     * When reading bits for decoding, there may be some left over if
-     * there weren't enough bits for the whole operation.  Store those
-     * here for use in the next decode call.
-     */
-    unsigned int leftover_bits;
-    unsigned char leftover_bits_data;
-
-    /*
-     * Used to report output bytes as they are collected.  The last time
-     * this is called from convencode_finish() nbits may be < 8.
-     */
-    int (*output)(struct convcode *ce, void *output_data, unsigned char byte,
-		  unsigned int nbits);
-    void *output_data;
-};
+#define trellis_entry(ce, column, row) get_trellis_column(ce, column)[row]
 
 void
 reinit_convcode(struct convcode *ce)
@@ -126,25 +72,54 @@ num_bits_is_odd(unsigned int v)
 void
 free_convcode(struct convcode *ce)
 {
-    if (ce->polys)
-	free(ce->polys);
     if (ce->convert)
 	free(ce->convert);
 
-    if (ce->trellis) {
-	unsigned int i;
-
-	for (i = 0; i < ce->trellis_size; i++) {
-	    if (ce->trellis[i])
-		free(ce->trellis[i]);
-	}
+    if (ce->trellis)
 	free(ce->trellis);
-    }
     if (ce->curr_path_values)
 	free(ce->curr_path_values);
     if (ce->next_path_values)
 	free(ce->next_path_values);
     free(ce);
+}
+
+int
+setup_convcode1(struct convcode *ce, unsigned int k, uint16_t *polynomials,
+		unsigned int num_polynomials, unsigned int max_decode_len_bits)
+{
+    unsigned int i;
+
+    if (num_polynomials < 1 || num_polynomials > CONVCODE_MAX_POLYNOMIALS)
+	return 1;
+
+    memset(ce, 0, sizeof(*ce));
+    ce->k = k;
+    ce->state_mask = (1 << k) - 1;
+    ce->convert_size = 1 << k;
+
+    ce->num_polys = num_polynomials;
+    for (i = 0; i < ce->num_polys; i++)
+	ce->polys[ce->num_polys - i - 1] = reverse_bits(k, polynomials[i]);
+
+    if (max_decode_len_bits > 0) {
+	ce->num_states = 1 << (k - 1);
+	ce->trellis_size = max_decode_len_bits + k * ce->num_polys;
+    }
+    return 0;
+}
+
+void
+setup_convcode2(struct convcode *ce)
+{
+    unsigned int i, j;
+
+    for (i = 0; i < ce->convert_size; i++) {
+	ce->convert[i] = 0;
+	for (j = 0; j < ce->num_polys; j++) {
+	    ce->convert[i] |= num_bits_is_odd(i & ce->polys[j]) << j;
+	}
+    }
 }
 
 struct convcode *
@@ -156,49 +131,29 @@ alloc_convcode(unsigned int k, uint16_t *polynomials,
 	       void *output_data)
 {
     struct convcode *ce;
-    unsigned int i, j;
 
     ce = malloc(sizeof(*ce));
     if (!ce)
 	return NULL;
-    memset(ce, 0, sizeof(*ce));
-    ce->k = k;
+    if (setup_convcode1(ce, k, polynomials, num_polynomials,
+			max_decode_len_bits)) {
+	free(ce);
+	return NULL;
+    }
+
     ce->output = output;
     ce->output_data = output_data;
-    ce->state_mask = (1 << k) - 1;
 
-    ce->polys = malloc(sizeof(*ce->polys) * num_polynomials);
-    if (!ce->polys)
-	goto out_err;
-    ce->num_polys = num_polynomials;
-
-    for (i = 0; i < ce->num_polys; i++)
-	ce->polys[ce->num_polys - i - 1] = reverse_bits(k, polynomials[i]);
-
-    ce->convert_size = 1 << k;
     ce->convert = malloc(sizeof(*ce->convert) * ce->convert_size);
     if (!ce->convert)
 	goto out_err;
-    memset(ce->convert, 0, sizeof(*ce->convert) * ce->convert_size);
-
-    for (i = 0; i < ce->convert_size; i++) {
-	for (j = 0; j < ce->num_polys; j++) {
-	    ce->convert[i] |= num_bits_is_odd(i & ce->polys[j]) << j;
-	}
-    }
 
     if (max_decode_len_bits > 0) {
-	ce->num_states = 1 << (k - 1);
 	/* Add on a bit for the stuff at the end. */
-	ce->trellis_size = max_decode_len_bits + k * num_polynomials;
-	ce->trellis = malloc(sizeof(*ce->trellis) * ce->trellis_size);
+	ce->trellis = malloc(sizeof(*ce->trellis) *
+			     ce->trellis_size * ce->num_states);
 	if (!ce->trellis)
 	    goto out_err;
-	for (i = 0; i < ce->trellis_size; i++) {
-	    ce->trellis[i] = malloc(sizeof(**ce->trellis) * ce->num_states);
-	    if (!ce->trellis[i])
-		goto out_err;
-	}
 
 	ce->curr_path_values = malloc(sizeof(*ce->curr_path_values)
 				      * ce->num_states);
@@ -210,6 +165,7 @@ alloc_convcode(unsigned int k, uint16_t *polynomials,
 	    goto out_err;
     }
 
+    setup_convcode2(ce);
     reinit_convcode(ce);
 
     return ce;
@@ -331,17 +287,17 @@ decode_bits(struct convcode *ce, unsigned int bits)
 	    dist2 += hamming_distance(ce->convert[pstate2], bits);
 
 	if (dist2 < dist1) {
-	    ce->trellis[ce->ctrellis][i] = pstate2 >> 1;
+	    trellis_entry(ce, ce->ctrellis, i) = pstate2 >> 1;
 	    nextp[i] = dist2;
 	} else {
-	    ce->trellis[ce->ctrellis][i] = pstate1 >> 1;
+	    trellis_entry(ce, ce->ctrellis, i) = pstate1 >> 1;
 	    nextp[i] = dist1;
 	}
     }
 #if 0
     printf("T(%u) %x\n", ce->ctrellis, bits);
     for (i = 0; i < ce->num_states; i++) {
-	printf(" %4.4u", ce->trellis[ce->ctrellis][i]);
+	printf(" %4.4u", trellis_entry(ce, ce->ctrellis, i);
     }
     printf("\n");
     for (i = 0; i < ce->num_states; i++) {
@@ -435,17 +391,17 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 	uint16_t pstate;
 
 	i--;
-	pstate = ce->trellis[i][min_pos];
+	pstate = trellis_entry(ce, i, min_pos);
 	/*
 	 * Store the bit values in position 0 so we can play it back
 	 * forward easily.
 	 */
-	ce->trellis[i][0] = min_pos & 1;
+	trellis_entry(ce, i, 0) = min_pos & 1;
 	min_pos = pstate;
     }
 
     for (i = 0; i < ce->ctrellis - (ce->k - 1); i++) {
-	int rv = output_bits(ce, ce->trellis[i][0], 1);
+	int rv = output_bits(ce, trellis_entry(ce, i, 0), 1);
 	if (rv)
 	    return rv;
     }

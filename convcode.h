@@ -15,7 +15,82 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-struct convcode;
+#define CONVCODE_MAX_POLYNOMIALS 16
+
+/*
+ * The data structure for encoding and decoding.  Note that if you use
+ * alloc_convcode(), you don't need to mess with this.  But you can
+ * change output and output_data if you like.  But don't mess with
+ * anything else if you use alloc_convcode().  output and output_data
+ * will always be first so you can change them even if the structure
+ * changes underneath.
+ */
+struct convcode {
+    /*
+     * Used to report output bytes as they are collected.  The last time
+     * this is called from convencode_finish() nbits may be < 8.
+     */
+    int (*output)(struct convcode *ce, void *output_data, unsigned char byte,
+		  unsigned int nbits);
+    void *output_data;
+
+    /* The constraint, or polynomial size in bits.  Max is 16. */
+    unsigned int k;
+
+    /* Polynomials. */
+    uint16_t polys[CONVCODE_MAX_POLYNOMIALS];
+    unsigned int num_polys;
+
+    /* Current state. */
+    uint16_t state;
+    uint16_t state_mask;
+
+    /*
+     * Output bit processing.  Bits are collected in out_bits until we
+     * get 8, then we send it to the output.
+     */
+    unsigned char out_bits;
+    unsigned int out_bit_pos;
+
+    /* Total number of output bits we have generated. */
+    unsigned int total_out_bits;
+
+    /* For the given state, what is the encoded output? */
+    uint16_t *convert;
+    unsigned int convert_size;
+
+    /*
+     * Number of states in the state machine, 1 << (k - 1).
+     */
+    unsigned int num_states;
+
+    /*
+     * The bit trellis matrix.  The first array is an array of
+     * pointers to arrays of uint16_t, one for each possible output
+     * bit on decoding.  It is trellis_size elements.  Each array in
+     * that is individually allocated and contains the state for a
+     * specific input.  Each is num_states elements.
+     */
+    uint16_t *trellis;
+    unsigned int trellis_size;
+    unsigned int ctrellis; /* Current trellis value */
+
+    /*
+     * You don't need the whole path value matrix, you only need the
+     * previous one and the next one (the one you are working on).
+     * Each of these is num_states elements.
+     */
+    unsigned int *curr_path_values;
+    unsigned int *next_path_values;
+
+    /*
+     * When reading bits for decoding, there may be some left over if
+     * there weren't enough bits for the whole operation.  Store those
+     * here for use in the next decode call.
+     */
+    unsigned int leftover_bits;
+    unsigned char leftover_bits_data;
+};
 
 /*
  * If you want to use the coder again after an encode or decode, you
@@ -104,4 +179,37 @@ int convdecode_data(struct convcode *ce,
 int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 		      unsigned int *num_errs);
     
+/*
+ * If you want to manage all the memory yourself, then do the following:
+ *  * Get your own copy of struct convcode.
+ *  * Call setup_convcode1.  This will set up various data items you will
+ *    need for allocation.
+ *  * Set ce->output, ce->output_data
+ *  * Allocate the following:
+ *    ce->convert - sizeof(*ce->convert) * ce->convert_size
+ *  * If you are doing decoding, allocate the following:
+ *    ce->trellis - sizeof(*ce->trellis) * ce->trellis_size * ce->num_states
+ *    ce->curr_paths_value - sizeof(*ce->curr_path_values) * ce->num_states
+ *    ce->next_paths_value - sizeof(*ce->next_path_values) * ce->num_states
+ *  * Call setup_convcode2(ce)
+ *  * Call reinit_convcode(ce)
+ *
+ * You can look at the code for the various size calculations if you want
+ * to statically allocate the various entries.
+ *
+ * Note that if you use this technique, you will not be binary
+ * compatible with newer libraries of this code.  But that's probably
+ * not an issue.
+ */
+
+/*
+ * See the above discussion and alloc_convcode for the meaning of the values.
+ */
+int setup_convcode1(struct convcode *ce, unsigned int k, uint16_t *polynomials,
+		    unsigned int num_polynomials,
+		    unsigned int max_decode_len_bits);
+
+/* See the above discussion for how to use this. */
+void setup_convcode2(struct convcode *ce);
+
 #endif /* CONVCODE_H */
