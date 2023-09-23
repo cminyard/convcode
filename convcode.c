@@ -496,7 +496,7 @@ static void
 do_encode_data(struct convcode *ce, const char *input, unsigned int *total_bits)
 {
     unsigned int i, nbits;
-    unsigned char byte;
+    unsigned char byte = 0;
 
     for (i = 0, nbits = 0; input[i]; i++) {
 	if (input[i] == '1')
@@ -518,7 +518,7 @@ do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
 	       unsigned int *num_errs)
 {
     unsigned int i, nbits;
-    unsigned char byte;
+    unsigned char byte = 0;
 
     for (i = 0, nbits = 0; input[i]; i++) {
 	if (input[i] == '1')
