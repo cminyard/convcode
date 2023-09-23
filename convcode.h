@@ -109,14 +109,14 @@ int convdecode_data(struct convcode *ce,
 		    unsigned char *bytes, unsigned int nbits);
 
 /*
- * Once all the data has been fed for encoding, you must call this to
+ * Once all the data has been fed for decoding, you must call this to
  * finish the operation.  Output will be done from here.  The total
  * number of bits generated is returned in total_out_bits;  The total
  * number of errors encounter is returns in num_errs.
  *
- * If the output function (see above) returns an error, that error will be
- * returned here.  This will also return 1 the data exceeds the available
- * size given in max_decode_len_bits above.
+ * If the output function (see above) returns an error, that error
+ * will be returned here.  This will also return 1 if the data exceeds
+ * the available size given in max_decode_len_bits above.
  */
 int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 		      unsigned int *num_errs);
