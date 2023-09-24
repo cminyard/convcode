@@ -460,13 +460,19 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  *
  * To supply your own input and output, run as:
  *
- * ./convcode [-t] [-x] -p <poly1> [ -p <poly2> ... ] k <bits>
+ * ./convcode [-t] [-x] [-s start state] [-i init_val]
+ *        -p <poly1> [ -p <poly2> ... ] k <bits>
  *
  * where bits is a sequence of 0 or 1.  The -x option disables the
  * "tail" of the encoder and expectation of the tail in the decoder.
  * (see the convcode.h file about do_tail).  -x works with -t to run
  * the tests that way.  Otherwise, no other options have an effect
  * with -t.
+ *
+ * The -s and -i options set the start state of the encoder/decoder,
+ * and for decoding the init value for the probability matrix for
+ * values besides the start state.  See the discussion on tails in
+ * convcode.h for detail.
  *
  * For instance, to decode some data with the Voyager coder, do:
  *
