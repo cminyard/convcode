@@ -6,6 +6,7 @@ convcode: convcode.c convcode.h
 
 check: convcode
 	./convcode -t
+	./convcode -t -x
 
 clean:
 	rm -f convcode

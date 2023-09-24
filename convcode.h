@@ -40,6 +40,16 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  * decoded.  You can get a pretty big matrix from this.  If you say 0
  * here, you can only use the coder for encoding.
  *
+ * The do_tail option enables the "tail" of the convolutional code,
+ * and the processing of the "tail" on decode.  Basically, after you
+ * have processed the data, if you enable the tail it will push (k - 1)
+ * extra bits by feeding 0's into the state machine and generate
+ * ((k - 1) * num_polynomials) output bits.  On decoding, it will drop
+ * the last k - 1 bits of output (that would be produce from the extra
+ * generated bits).  It seems to work fine without this, but I have seen
+ * convolutional encoders use this.  I don't know how necessary it is,
+ * but you have an option.
+ *
  * Two separate output functions are set, one for the encoder and one
  * for the decoder.  You can set one you don't use to NULL.
  *
@@ -54,6 +64,7 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
 struct convcode *alloc_convcode(unsigned int k, uint16_t *polynomials,
 				unsigned int num_polynomials,
 				unsigned int max_decode_len_bits,
+				bool do_tail,
 				convcode_output enc_output,
 				void *enc_out_user_data,
 				convcode_output dec_output,
@@ -176,6 +187,8 @@ struct convcode {
     /* Polynomials. */
     uint16_t polys[CONVCODE_MAX_POLYNOMIALS];
     unsigned int num_polys;
+
+    bool do_tail;
 
     /* Current state. */
     uint16_t enc_state;
