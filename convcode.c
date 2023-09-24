@@ -6,7 +6,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
 
 #include "convcode.h"
 
@@ -24,41 +23,46 @@ get_trellis_column(struct convcode *ce, unsigned int column)
 #define trellis_entry(ce, column, row) get_trellis_column(ce, column)[row]
 
 void
-reinit_convencode(struct convcode *ce)
+reinit_convencode(struct convcode *ce, unsigned int start_state)
 {
-    ce->enc_state = 0;
+    ce->enc_state = start_state;
     ce->enc_out.out_bits = 0;
     ce->enc_out.out_bit_pos = 0;
     ce->enc_out.total_out_bits = 0;
 }
 
-void
-reinit_convdecode(struct convcode *ce)
+int
+reinit_convdecode(struct convcode *ce, unsigned int start_state,
+		  unsigned int init_other_states)
 {
     unsigned int i;
+
+    if (start_state >= ce->num_states)
+	return 1;
 
     ce->dec_out.out_bits = 0;
     ce->dec_out.out_bit_pos = 0;
     ce->dec_out.total_out_bits = 0;
 
     if (ce->num_states > 0) {
-	ce->curr_path_values[0] = 0;
-	for (i = 1; i < ce->num_states; i++)
-	    /*
-	     * The "/ 2" lets us not have to check for UINT_MAX when
-	     * using.  Otherwise adding to UINT_MAX would overflow.
-	     */
-	    ce->curr_path_values[i] = UINT_MAX / 2;
+	ce->curr_path_values[start_state] = 0;
+	for (i = 0; i < ce->num_states; i++) {
+	    if (i == start_state)
+		continue;
+	    ce->curr_path_values[i] = init_other_states;
+	}
 	ce->ctrellis = 0;
     }
     ce->leftover_bits = 0;
+    return 0;
 }
 
 void
 reinit_convcode(struct convcode *ce)
 {
-    reinit_convencode(ce);
-    reinit_convdecode(ce);
+    reinit_convencode(ce, CONVCODE_DEFAULT_START_STATE);
+    reinit_convdecode(ce, CONVCODE_DEFAULT_START_STATE,
+		      CONVCODE_DEFAULT_INIT_VAL);
 }
 
 static unsigned int
@@ -458,10 +462,11 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  *
  * ./convcode [-t] [-x] -p <poly1> [ -p <poly2> ... ] k <bits>
  *
- * where bits is a sequence of 0 or 1.  The -x option enables the
- * "tail" of the encoder and expects the tail in the decoder.  (see
- * the convcode.h file about do_tail).  -x works with -t to run the
- * tests that way.  Otherwise, no other options have an effect with -t.
+ * where bits is a sequence of 0 or 1.  The -x option disables the
+ * "tail" of the encoder and expectation of the tail in the decoder.
+ * (see the convcode.h file about do_tail).  -x works with -t to run
+ * the tests that way.  Otherwise, no other options have an effect
+ * with -t.
  *
  * For instance, to decode some data with the Voyager coder, do:
  *
@@ -758,17 +763,34 @@ main(int argc, char *argv[])
     unsigned int k;
     struct convcode *ce;
     unsigned int arg, total_bits, num_errs = 0;
-    bool decode = false, test = false, do_tail = false;
+    bool decode = false, test = false, do_tail = true;
+    unsigned int start_state = 0, init_val = CONVCODE_DEFAULT_INIT_VAL;
 
     for (arg = 1; arg < argc; arg++) {
 	if (argv[arg][0] != '-')
 	    break;
 	if (strcmp(argv[arg], "-d") == 0) {
 	    decode = true;
+	} else if (strcmp(argv[arg], "-e") == 0) {
+	    decode = false;
 	} else if (strcmp(argv[arg], "-t") == 0) {
 	    test = true;
 	} else if (strcmp(argv[arg], "-x") == 0) {
-	    do_tail = true;
+	    do_tail = false;
+	} else if (strcmp(argv[arg], "-s") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -s\n");
+		return 1;
+	    }
+	    start_state = strtoul(argv[arg], NULL, 0);
+	} else if (strcmp(argv[arg], "-i") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -i\n");
+		return 1;
+	    }
+	    init_val = strtoul(argv[arg], NULL, 0);
 	} else if (strcmp(argv[arg], "-p") == 0) {
 	    if (num_polys == 16) {
 		fprintf(stderr, "Too many polynomials\n");
@@ -808,6 +830,10 @@ main(int argc, char *argv[])
     ce = alloc_convcode(k, polys, num_polys, 128, do_tail,
 			handle_output, NULL,
 			handle_output, NULL);
+    if (start_state)
+	reinit_convencode(ce, start_state);
+    if (start_state || init_val != CONVCODE_DEFAULT_INIT_VAL)
+	reinit_convdecode(ce, start_state, init_val);
 
     if (arg >= argc) {
 	fprintf(stderr, "No data given\n");

@@ -9,6 +9,8 @@ To avoid others having the same problem, I've uploaded mine.
 
 The API is described in the convcode.h file.
 
+This supports tail-biting, see the API for a description.
+
 Compile with -DCONVCODE_TESTS to enable tests and a main().  Search
 for "Test code" in convcode.c for details on how to use it.  Compiling
 with "make" here will compile with that enabled, "make check" will run
