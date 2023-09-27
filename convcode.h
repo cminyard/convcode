@@ -224,7 +224,8 @@ int convdecode_data(struct convcode *ce,
  * Once all the data has been fed for decoding, you must call this to
  * finish the operation.  Output will be done from here.  The total
  * number of bits generated is returned in total_out_bits;  The total
- * number of errors encounter is returns in num_errs.
+ * number of errors (or total uncertainty when doing soft decoding)
+ * encountered is returned in num_errs.
  *
  * If the output function (see above) returns an error, that error
  * will be returned here.  This will also return 1 if the data exceeds
