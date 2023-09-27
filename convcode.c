@@ -130,6 +130,7 @@ setup_convcode1(struct convcode *ce, unsigned int k,
     ce->num_states = 1 << (k - 1);
     ce->do_tail = do_tail;
     ce->recursive = recursive;
+    ce->uncertainty_100 = 100;
 
     /*
      * Polynomials come in as the first bit being the high bit.  We
@@ -279,6 +280,12 @@ set_encode_output_per_symbol(struct convcode *ce, bool val)
     ce->enc_out.output_symbol_size = val;
 }
 
+void
+set_decode_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty)
+{
+    ce->uncertainty_100 = max_uncertainty;
+}
+
 static int
 output_bits(struct convcode *ce, struct convcode_outdata *of,
 	    unsigned int bits, unsigned int len)
@@ -317,7 +324,8 @@ encode_bit(struct convcode *ce, unsigned int bit)
 }
 
 int
-convencode_data(struct convcode *ce, unsigned char *bytes, unsigned int nbits)
+convencode_data(struct convcode *ce,
+		const unsigned char *bytes, unsigned int nbits)
 {
     unsigned int i, j;
     int rv;
@@ -371,9 +379,24 @@ num_bits_set(unsigned int v)
 
 /* Number of bits that are different between v1 and v2. */
 static unsigned int
-hamming_distance(unsigned int v1, unsigned int v2)
+hamming_distance(struct convcode *ce, unsigned int v1, unsigned int v2,
+		 const uint8_t *uncertainty)
 {
-    return num_bits_set(v1 ^ v2);
+    unsigned int i, rv = 0;
+
+    if (!uncertainty)
+	return num_bits_set(v1 ^ v2);
+
+    for (i = 0; i < ce->num_polys; i++) {
+	if ((v1 & 1) == (v2 & 1)) {
+	    rv += uncertainty[i];
+	} else {
+	    rv += ce->uncertainty_100 - uncertainty[i];
+	}
+	v1 >>= 1;
+	v2 >>= 1;
+    }
+    return rv;
 }
 
 static int
@@ -384,22 +407,27 @@ get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
     else
 	return 1;
 #if 0
+    /* For debugging */
     else if (ce->next_state[1][pstate] == cstate)
 	return 1;
     else
 	printf("ERR!: %x %x %x %x\n", pstate, cstate);
     return 0;
 #endif
+#if 0
+    /* If not doing recursive, this is sufficient. */
+    return cstate & 1;
+#endif
 }
 
 static int
-decode_bits(struct convcode *ce, unsigned int bits)
+decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 {
     unsigned int *currp = ce->curr_path_values;
     unsigned int *nextp = ce->next_path_values;
     unsigned int i;
 
-    if (ce->ctrellis >= ce->trellis_size)
+    if (ce->ctrellis + ce->num_polys > ce->trellis_size)
 	return 1;
 
     for (i = 0; i < ce->num_states; i++) {
@@ -415,10 +443,12 @@ decode_bits(struct convcode *ce, unsigned int bits)
 
 	dist1 = currp[pstate1];
 	bit = get_prev_bit(ce, pstate1, i);
-	dist1 += hamming_distance(ce->convert[bit][pstate1], bits);
+	dist1 += hamming_distance(ce, ce->convert[bit][pstate1],
+				  bits, uncertainty);
 	dist2 = currp[pstate2];
 	bit = get_prev_bit(ce, pstate2, i);
-	dist2 += hamming_distance(ce->convert[bit][pstate2], bits);
+	dist2 += hamming_distance(ce, ce->convert[bit][pstate2],
+				  bits, uncertainty);
 
 	if (dist2 < dist1) {
 	    trellis_entry(ce, ce->ctrellis, i) = pstate2;
@@ -446,7 +476,7 @@ decode_bits(struct convcode *ce, unsigned int bits)
 }
 
 static unsigned int
-extract_bits(unsigned char *bytes, unsigned int curr, unsigned int nbits)
+extract_bits(const unsigned char *bytes, unsigned int curr, unsigned int nbits)
 {
     unsigned int pos = curr / 8;
     unsigned int opos = 0;
@@ -468,32 +498,54 @@ extract_bits(unsigned char *bytes, unsigned int curr, unsigned int nbits)
 }
 
 int
-convdecode_data(struct convcode *ce, unsigned char *bytes, unsigned int nbits)
+convdecode_data(struct convcode *ce,
+		const unsigned char *bytes, unsigned int nbits,
+		const uint8_t *uncertainty)
 {
-    unsigned int curr_bit = 0;
+    unsigned int curr_bit = 0, i;
     int rv;
 
     if (ce->leftover_bits) {
 	unsigned int newbits, extract_size;
 
 	if (nbits + ce->leftover_bits < ce->num_polys) {
+	    /* Not enough bits for a full symbol, just store these. */
 	    ce->leftover_bits_data |= bytes[0] << ce->leftover_bits;
-	    ce->leftover_bits += nbits;
+	    if (uncertainty) {
+		for (i = 0; i < nbits; i++)
+		    ce->leftover_uncertainty[ce->leftover_bits++] =
+			uncertainty[i];
+	    } else {
+		ce->leftover_bits += nbits;
+	    }
 	    ce->leftover_bits_data &= (1 << ce->leftover_bits) - 1;
 	    return 0;
 	}
+	/* We got enough bits for a full symbol, process it. */
 	extract_size = ce->num_polys - ce->leftover_bits;
 	newbits = extract_bits(bytes, curr_bit, extract_size);
 	curr_bit += extract_size;
 	nbits -= extract_size;
 	ce->leftover_bits_data |= newbits << ce->leftover_bits;
-	rv = decode_bits(ce, ce->leftover_bits_data);
+	if (uncertainty) {
+	    for (i = 0; i < extract_size; i++)
+		ce->leftover_uncertainty[ce->leftover_bits++] =
+		    uncertainty[i];
+	    rv = decode_bits(ce, ce->leftover_bits_data,
+			     ce->leftover_uncertainty);
+	} else {
+	    rv = decode_bits(ce, ce->leftover_bits_data, NULL);
+	}
 	ce->leftover_bits = 0;
     }
 
     while (nbits >= ce->num_polys) {
 	unsigned int bits = extract_bits(bytes, curr_bit, ce->num_polys);
-	rv = decode_bits(ce, bits);
+
+	if (uncertainty)
+	    rv = decode_bits(ce, bits, uncertainty + curr_bit);
+	else
+	    rv = decode_bits(ce, bits, NULL);
 	if (rv)
 	    return rv;
 	curr_bit += ce->num_polys;
@@ -503,6 +555,10 @@ convdecode_data(struct convcode *ce, unsigned char *bytes, unsigned int nbits)
     if (nbits) {
 	ce->leftover_bits_data = bytes[curr_bit / 8] >> (curr_bit % 8);
 	ce->leftover_bits_data &= (1 << nbits) - 1;
+	if (uncertainty) {
+	    for (i = 0; i < ce->leftover_bits; i++)
+		ce->leftover_uncertainty[i] = uncertainty[curr_bit++];
+	}
     }
     return 0;
 }
@@ -638,7 +694,7 @@ do_encode_data(struct convcode *ce, const char *input, unsigned int *total_bits)
 
 static void
 do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
-	       unsigned int *num_errs)
+	       unsigned int *num_errs, uint8_t *uncertainty)
 {
     unsigned int i, nbits;
     unsigned char byte = 0;
@@ -648,13 +704,13 @@ do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
 	    byte |= 1 << nbits;
 	nbits++;
 	if (nbits == 8) {
-	    convdecode_data(ce, &byte, 8);
+	    convdecode_data(ce, &byte, 8, uncertainty);
 	    nbits = 0;
 	    byte = 0;
 	}
     }
     if (nbits > 0)
-	convdecode_data(ce, &byte, nbits);
+	convdecode_data(ce, &byte, nbits, uncertainty);
     convdecode_finish(ce, total_bits, num_errs);
 }
 
@@ -684,7 +740,7 @@ handle_test_output(struct convcode *ce, void *output_data, unsigned char byte,
 static unsigned int
 run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	 bool do_tail, const char *encoded, const char *decoded,
-	 unsigned int expected_errs)
+	 unsigned int expected_errs, uint8_t *uncertainty)
 {
     struct test_data t;
     struct convcode *ce = alloc_convcode(k, polys, npolys, 128,
@@ -714,7 +770,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	}
 	t.outpos = 0;
     }
-    do_decode_data(ce, encoded, &total_bits, &num_errs);
+    do_decode_data(ce, encoded, &total_bits, &num_errs, uncertainty);
     t.output[t.outpos] = '\0';
     if (strcmp(decoded, t.output) != 0) {
 	printf("  decode failure, expected\n    %s\n  got\n    %s\n",
@@ -771,7 +827,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	    memcpy(encoded, t.output, t.outpos);
 	    encoded[t.outpos] = '\0';
 	    t.outpos = 0;
-	    do_decode_data(ce, encoded, &total_bits, &num_errs);
+	    do_decode_data(ce, encoded, &total_bits, &num_errs, NULL);
 	    t.output[t.outpos] = '\0';
 	    if (strcmp(t.output, decoded) != 0) {
 		printf("  decode failure, expected\n    %s\n  got\n    %s\n",
@@ -795,17 +851,17 @@ run_tests(bool do_tail)
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail,
 			     "0011010010011011110100011100110111",
-			     "010111001010001", 0);
+			     "010111001010001", 0, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
 			     "0011010010011011110000011100110111",
-			     "010111001010001", 1);
+			     "010111001010001", 1, NULL);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail,
 			     "001101001001101111010001110011",
-			     "010111001010001", 0);
+			     "010111001010001", 0, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
 			     "001101001001101111000001110011",
-			     "010111001010001", 1);
+			     "010111001010001", 1, NULL);
 	}
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
@@ -813,30 +869,56 @@ run_tests(bool do_tail)
 	convcode_state polys[2] = { 3, 7 };
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail,
-			     "0111101000110000", "101100", 0);
+			     "0111101000110000", "101100", 0, NULL);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail,
-			     "011110100011", "101100", 0);
+			     "011110100011", "101100", 0, NULL);
 	}
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
     {
 	convcode_state polys[2] = { 5, 3 };
+	static uint8_t uncertainties[18] = {
+	    0, 0, 100, 0, 0, 0, 0, 0,
+	    0, 0, 0, 0, 0, 0, 0, 0,
+	    0, 0,
+	};
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail,
-			     "100111101110010111", "1001101", 0);
+			     "100111101110010111", "1001101", 0, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
-			     "110111101100010111", "1001101", 2);
+			     "110111101100010111", "1001101", 2, NULL);
+	    errs += run_test(3, polys, 2, do_tail,
+			     "100111101110010111", "1001101",
+			     200, uncertainties);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail,
-			     "10011110111001", "1001101", 0);
+			     "10011110111001", "1001101", 0, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
-			     "11011110110001", "1001101", 2);
+			     "11011110110001", "1001101", 2, NULL);
+	    errs += run_test(3, polys, 2, do_tail,
+			     "10011110111001", "1001101",
+			     200, uncertainties);
 	}
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
     { /* Voyager */
 	convcode_state polys[2] = { 0171, 0133 };
+	static uint8_t uncertainties[28] = {
+	    0, 0, 0, 0, 100, 0, 0, 0,
+	    0, 0, 0, 0, 0, 0, 0, 0,
+	    0, 0, 0, 0, 0, 0, 0, 0,
+	    0, 0, 0, 0
+	};
+	if (do_tail) {
+	    errs += run_test(7, polys, 2, do_tail,
+			     "0011100010011010100111011100", "01011010",
+			     300, uncertainties);
+	} else {
+	    errs += run_test(7, polys, 2, do_tail,
+			     "0011100010011010", "01011010",
+			     200, uncertainties);
+	}
 	errs += rand_test(7, polys, 2, do_tail, false);
     }
     { /* LTE */
@@ -844,17 +926,17 @@ run_tests(bool do_tail)
 	if (do_tail) {
 	    errs += run_test(7, polys, 3, do_tail,
 			     "111001101011100110011101111111100110001111",
-			     "10110111", 0);
+			     "10110111", 0, NULL);
 	    errs += run_test(7, polys, 3, do_tail,
 			     "001001101011100110011101011111100110001011",
-			     "10110111", 4);
+			     "10110111", 4, NULL);
 	} else {
 	    errs += run_test(7, polys, 3, do_tail,
 			     "111001101011100110011101",
-			     "10110111", 0);
+			     "10110111", 0, NULL);
 	    errs += run_test(7, polys, 3, do_tail,
 			     "001001101010100010011101",
-			     "10110111", 4);
+			     "10110111", 4, NULL);
 	}
 	errs += rand_test(7, polys, 3, do_tail, false);
     }
@@ -978,7 +1060,7 @@ main(int argc, char *argv[])
 
     printf("  ");
     if (decode)
-	do_decode_data(ce, argv[arg], &total_bits, &num_errs);
+	do_decode_data(ce, argv[arg], &total_bits, &num_errs, NULL);
     else
 	do_encode_data(ce, argv[arg], &total_bits);
 

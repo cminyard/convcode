@@ -162,6 +162,29 @@ void reinit_convcode(struct convcode *ce);
 void set_encode_output_per_symbol(struct convcode *ce, bool val);
 
 /*
+ * This is for handling soft decoding.  Soft decoding takes into
+ * account how certain (or, in this case, uncertain) a particular bit
+ * is to be correct.  For instance, when doing phase decoding, if you
+ * are right on phase, then you would be 0% uncertain that the value
+ * was incorrect.  If it was half-way beteen two expected phase
+ * values, you would be 50% uncertain the value was correct.
+ *
+ * By default the uncertainty ranges from 0 to 100, where 0 is 100%
+ * uncertain and 100 is 0% certain.  This function allows you to set a
+ * different max value to range from.  For instance, if you set it to
+ * 10 then the values would range from 0 to 10.
+ *
+ * These uncertainty values are given in a range from 0 to 50; if you
+ * were more than 50% uncertain, you would have chosen the other
+ * value, of course.
+ *
+ * When using soft decoding, them meaning of num_errs from
+ * convdecode_finish() changes.  It is no longer a count of errors, it
+ * is instead a rating of uncertainty.
+ */
+void set_decode_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty);
+
+/*
  * Feed some data into encoder.  The size is given in bits, the data
  * goes in low bit first.  The last byte may not be completely full,
  * and that's fine, it will only use the low nbits % 8.
@@ -169,7 +192,7 @@ void set_encode_output_per_symbol(struct convcode *ce, bool val);
  * You can feed data in with multiple calls.  Returns an error
  */
 int convencode_data(struct convcode *ce,
-		    unsigned char *bytes, unsigned int nbits);
+		    const unsigned char *bytes, unsigned int nbits);
 
 /*
  * Once all the data has been fed for encoding, you must call this to
@@ -186,10 +209,16 @@ int convencode_finish(struct convcode *ce, unsigned int *total_out_bits);
  * goes in low bit first.  The last byte may not be completely full,
  * and that's fine, it will only use the low nbits % 8.
  *
+ * If uncertainty is not NULL, this will do soft decoding.  Each array
+ * entry will correspond to the uncertainty of the given bit number.  See
+ * the discussion on soft decoding above the set_decode_max_uncertainty
+ * function.  If it is NULL, it will do normal hard decoding.
+ *
  * You can feed data in with multiple calls.
  */
 int convdecode_data(struct convcode *ce,
-		    unsigned char *bytes, unsigned int nbits);
+		    const unsigned char *bytes, unsigned int nbits,
+		    const uint8_t *uncertainty);
 
 /*
  * Once all the data has been fed for decoding, you must call this to
@@ -310,12 +339,20 @@ struct convcode {
     unsigned int *next_path_values;
 
     /*
+     * The uncertainty that maps to 100% uncertain for soft decoding.
+     * See the discussion on soft decoding above the
+     * set_decode_max_uncertainty function.
+     */
+    uint8_t uncertainty_100;
+
+    /*
      * When reading bits for decoding, there may be some left over if
      * there weren't enough bits for the whole operation.  Store those
      * here for use in the next decode call.
      */
     unsigned int leftover_bits;
-    unsigned char leftover_bits_data;
+    convcode_state leftover_bits_data;
+    uint8_t leftover_uncertainty[CONVCODE_MAX_POLYNOMIALS];
 };
 
 /*
