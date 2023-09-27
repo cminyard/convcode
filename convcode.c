@@ -125,7 +125,6 @@ setup_convcode1(struct convcode *ce, unsigned int k, uint16_t *polynomials,
     memset(ce, 0, sizeof(*ce));
     ce->k = k;
     ce->num_states = 1 << (k - 1);
-    ce->state_mask = ce->num_states - 1;
     ce->do_tail = do_tail;
     ce->recursive = recursive;
 
@@ -148,36 +147,58 @@ void
 setup_convcode2(struct convcode *ce)
 {
     unsigned int val, i, j;
+    uint16_t state_mask = ce->num_states - 1;
 
+    /*
+     * Calculate the encoder output arrays and the next state arrays.
+     * These are pre-calculated so encoding is just a matter of using
+     * the convert arrays to get the output and the next_state arrays
+     * to get the next state.
+     */
     if (!ce->recursive) {
 	for (i = 0; i < ce->num_states; i++) {
 	    ce->convert[0][i] = 0;
 	    ce->convert[1][i] = 0;
+	    /* Go through each polynomial to calculate the output. */
 	    for (j = 0; j < ce->num_polys; j++) {
 		val = num_bits_is_odd((i << 1) & ce->polys[j]);
 		ce->convert[0][i] |= val << j;
 		val = num_bits_is_odd(((i << 1) | 1) & ce->polys[j]);
 		ce->convert[1][i] |= val << j;
 	    }
-	    ce->next_state[0][i] = (i << 1) & ce->state_mask;
-	    ce->next_state[1][i] = ((i << 1) | 1) & ce->state_mask;
+
+	    /* Next state is easy, just shift in the value and mask. */
+	    ce->next_state[0][i] = (i << 1) & state_mask;
+	    ce->next_state[1][i] = ((i << 1) | 1) & state_mask;
 	}
     } else {
 	for (i = 0; i < ce->num_states; i++) {
 	    uint16_t bval0, bval1;
 
+	    /* In recursive, the first output bit is always the value. */
 	    ce->convert[0][i] = 0;
 	    ce->convert[1][i] = 1;
+
+	    /*
+	     * This is the recursive bit calculated from the feedback
+	     * and the input.
+	     */
 	    bval0 = num_bits_is_odd((i << 1) & ce->polys[0]);
 	    bval1 = num_bits_is_odd(((i << 1) | 1) & ce->polys[0]);
+
+	    /*
+	     * Generate output from the rest of the polynomials.
+	     */
 	    for (j = 1; j < ce->num_polys; j++) {
 		val = num_bits_is_odd(((i << 1) | bval0) & ce->polys[j]);
 		ce->convert[0][i] |= val << j;
 		val = num_bits_is_odd(((i << 1) | bval1) & ce->polys[j]);
 		ce->convert[1][i] |= val << j;
 	    }
-	    ce->next_state[0][i] = ((i << 1) | bval0) & ce->state_mask;
-	    ce->next_state[1][i] = ((i << 1) | bval1) & ce->state_mask;
+
+	    /* Shift the recursive bit in to get the next state. */
+	    ce->next_state[0][i] = ((i << 1) | bval0) & state_mask;
+	    ce->next_state[1][i] = ((i << 1) | bval1) & state_mask;
 	}
     }
 }

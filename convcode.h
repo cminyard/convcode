@@ -264,7 +264,6 @@ struct convcode {
 
     /* Current state. */
     uint16_t enc_state;
-    uint16_t state_mask;
 
     /*
      * For the given state, what is the encoded output?  Indexed first
