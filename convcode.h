@@ -27,9 +27,11 @@ struct convcode;
 /*
  * This is the size of the polynomials and thus the maximum state
  * machine size, and the value to hold the state.  Keep it as small as
- * possible.
+ * possible to reduce the trellis size.  Size of K is limited by this
+ * value.
  */
 typedef uint16_t convcode_state;
+#define CONVCODE_MAX_K 16
 
 /*
  * Used to report output bits as they are generated.

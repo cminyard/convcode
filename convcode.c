@@ -122,6 +122,8 @@ setup_convcode1(struct convcode *ce, unsigned int k,
 
     if (num_polynomials < 1 || num_polynomials > CONVCODE_MAX_POLYNOMIALS)
 	return 1;
+    if (k > CONVCODE_MAX_K)
+	return 1;
 
     memset(ce, 0, sizeof(*ce));
     ce->k = k;
@@ -955,7 +957,7 @@ main(int argc, char *argv[])
     }
 
     k = strtoul(argv[arg++], NULL, 0);
-    if (k == 0 || k > CONVCODE_MAX_POLYNOMIALS) {
+    if (k == 0 || k > CONVCODE_MAX_K) {
 	fprintf(stderr, "Constraint (k) must be from 1 to %d\n",
 		CONVCODE_MAX_POLYNOMIALS);
 	return 1;
