@@ -16,6 +16,10 @@
 #include <stdbool.h>
 #include <limits.h>
 
+/*
+ * Maximum number of polynomials. I've never seen one with more than
+ * 8, but it doesn't take a lot of space to add a few more.
+ */
 #define CONVCODE_MAX_POLYNOMIALS 16
 
 struct convcode;
@@ -33,15 +37,20 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  * maximum value is 16,
  *
  * The polynomials are given in the array.  They are coded where the
- * low bit handles the first bit fed into the state machine.  This
+ * high bit handles the first bit fed into the state machine.  This
  * seems to be the standard used, but may be backwards from what you
- * expect.  There may be up to 16 polynomials.
+ * expect.  There may be up to CONVCODE_MAX_POLYNOMIALS polynomials.
  *
  * max_decode_len_bits is the maximum number of bits that can be
  * decoded.  You can get a pretty big matrix from this.  If you say 0
  * here, you can only use the coder for encoding.
  *
  * See the discussion below on tails for what do_tail does.
+ *
+ * The recursive setting enables a recursive decoder.  The first
+ * polynomial is the recursive one, the rest are the output
+ * polynomials.  The first bit output for each symbol will be the
+ * input bit, per standard recursive convolutional encoding.
  *
  * Two separate output functions are set, one for the encoder and one
  * for the decoder.  You can set one you don't use to NULL.
@@ -57,7 +66,7 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
 struct convcode *alloc_convcode(unsigned int k, uint16_t *polynomials,
 				unsigned int num_polynomials,
 				unsigned int max_decode_len_bits,
-				bool do_tail,
+				bool do_tail, bool recursive,
 				convcode_output enc_output,
 				void *enc_out_user_data,
 				convcode_output dec_output,
@@ -133,6 +142,17 @@ int reinit_convdecode(struct convcode *ce, unsigned int start_state,
 void reinit_convcode(struct convcode *ce);
 
 /*
+ * If set to false (the default) the output for encoding comes out in
+ * bytes except for possibly the last output.  If set to true, the
+ * output will come out in a symbol, or num_polynomial, number of bits
+ * each time, and there will not be a chunk at the end that is smaller.
+ * This is useful if you want to split up the individual output streams
+ * from each polynomial, like you would for a recursive decoder for
+ * turbo coding.
+ */
+void set_encode_output_per_symbol(struct convcode *ce, bool val);
+
+/*
  * Feed some data into encoder.  The size is given in bits, the data
  * goes in low bit first.  The last byte may not be completely full,
  * and that's fine, it will only use the low nbits % 8.
@@ -200,6 +220,14 @@ struct convcode_outdata {
     unsigned char out_bits;
     unsigned int out_bit_pos;
 
+    /*
+     * For encoding, this enables outputing the bytes in a per-symbol
+     * basis instead of a per-byte basis.  So, for instance, if
+     * num_polynomials is 3, you would get output in 3-bit chunks.
+     * Not really useful for decoding.
+     */
+    bool output_symbol_size;
+
     /* Total number of output bits we have generated. */
     unsigned int total_out_bits;
 };
@@ -232,14 +260,22 @@ struct convcode {
     unsigned int num_polys;
 
     bool do_tail;
+    bool recursive;
 
     /* Current state. */
     uint16_t enc_state;
     uint16_t state_mask;
 
-    /* For the given state, what is the encoded output? */
-    uint16_t *convert;
-    unsigned int convert_size;
+    /*
+     * For the given state, what is the encoded output?  Indexed first
+     * by the bit, then by the state.
+     */
+    unsigned int *convert[2];
+
+    /*
+     * 2D Array indexed first by bit then by current state.
+     */
+    uint16_t *next_state[2];
 
     /*
      * Number of states in the state machine, 1 << (k - 1).
@@ -302,7 +338,8 @@ struct convcode {
  */
 int setup_convcode1(struct convcode *ce, unsigned int k, uint16_t *polynomials,
 		    unsigned int num_polynomials,
-		    unsigned int max_decode_len_bits);
+		    unsigned int max_decode_len_bits,
+		    bool do_tail, bool recursive);
 
 /* See the above discussion for how to use this. */
 void setup_convcode2(struct convcode *ce);
