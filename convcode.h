@@ -25,6 +25,13 @@
 struct convcode;
 
 /*
+ * This is the size of the polynomials and thus the maximum state
+ * machine size, and the value to hold the state.  Keep it as small as
+ * possible.
+ */
+typedef uint16_t convcode_state;
+
+/*
  * Used to report output bits as they are generated.
  */
 typedef int (*convcode_output)(struct convcode *ce, void *user_data,
@@ -63,7 +70,7 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  * If output function returns an error, the operation is stopped and the
  * error will be returned from the various functions.
  */
-struct convcode *alloc_convcode(unsigned int k, uint16_t *polynomials,
+struct convcode *alloc_convcode(unsigned int k, convcode_state *polynomials,
 				unsigned int num_polynomials,
 				unsigned int max_decode_len_bits,
 				bool do_tail, bool recursive,
@@ -256,14 +263,14 @@ struct convcode {
     unsigned int k;
 
     /* Polynomials. */
-    uint16_t polys[CONVCODE_MAX_POLYNOMIALS];
+    convcode_state polys[CONVCODE_MAX_POLYNOMIALS];
     unsigned int num_polys;
 
     bool do_tail;
     bool recursive;
 
     /* Current state. */
-    uint16_t enc_state;
+    convcode_state enc_state;
 
     /*
      * For the given state, what is the encoded output?  Indexed first
@@ -274,7 +281,7 @@ struct convcode {
     /*
      * 2D Array indexed first by bit then by current state.
      */
-    uint16_t *next_state[2];
+    convcode_state *next_state[2];
 
     /*
      * Number of states in the state machine, 1 << (k - 1).
@@ -283,12 +290,12 @@ struct convcode {
 
     /*
      * The bit trellis matrix.  The first array is an array of
-     * pointers to arrays of uint16_t, one for each possible output
+     * pointers to arrays of convcode_state, one for each possible output
      * bit on decoding.  It is trellis_size elements.  Each array in
      * that is individually allocated and contains the state for a
      * specific input.  Each is num_states elements.
      */
-    uint16_t *trellis;
+    convcode_state *trellis;
     unsigned int trellis_size;
     unsigned int ctrellis; /* Current trellis value */
 
@@ -335,8 +342,8 @@ struct convcode {
 /*
  * See the above discussion and alloc_convcode for the meaning of the values.
  */
-int setup_convcode1(struct convcode *ce, unsigned int k, uint16_t *polynomials,
-		    unsigned int num_polynomials,
+int setup_convcode1(struct convcode *ce, unsigned int k,
+		    convcode_state *polynomials, unsigned int num_polynomials,
 		    unsigned int max_decode_len_bits,
 		    bool do_tail, bool recursive);
 

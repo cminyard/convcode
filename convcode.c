@@ -14,7 +14,7 @@
  * based upon how it is created.  So we use a one-dimensional matrix
  * and do our own indexing with the below two functions/macros.
  */
-static uint16_t *
+static convcode_state *
 get_trellis_column(struct convcode *ce, unsigned int column)
 {
     return ce->trellis + column * ce->num_states * sizeof(*ce->trellis);
@@ -113,8 +113,9 @@ free_convcode(struct convcode *ce)
 }
 
 int
-setup_convcode1(struct convcode *ce, unsigned int k, uint16_t *polynomials,
-		unsigned int num_polynomials, unsigned int max_decode_len_bits,
+setup_convcode1(struct convcode *ce, unsigned int k,
+		convcode_state *polynomials, unsigned int num_polynomials,
+		unsigned int max_decode_len_bits,
 		bool do_tail, bool recursive)
 {
     unsigned int i;
@@ -147,7 +148,7 @@ void
 setup_convcode2(struct convcode *ce)
 {
     unsigned int val, i, j;
-    uint16_t state_mask = ce->num_states - 1;
+    convcode_state state_mask = ce->num_states - 1;
 
     /*
      * Calculate the encoder output arrays and the next state arrays.
@@ -173,7 +174,7 @@ setup_convcode2(struct convcode *ce)
 	}
     } else {
 	for (i = 0; i < ce->num_states; i++) {
-	    uint16_t bval0, bval1;
+	    convcode_state bval0, bval1;
 
 	    /* In recursive, the first output bit is always the value. */
 	    ce->convert[0][i] = 0;
@@ -204,7 +205,7 @@ setup_convcode2(struct convcode *ce)
 }
 
 struct convcode *
-alloc_convcode(unsigned int k, uint16_t *polynomials,
+alloc_convcode(unsigned int k, convcode_state *polynomials,
 	       unsigned int num_polynomials,
 	       unsigned int max_decode_len_bits,
 	       bool do_tail, bool recursive,
@@ -307,7 +308,7 @@ output_bits(struct convcode *ce, struct convcode_outdata *of,
 static int
 encode_bit(struct convcode *ce, unsigned int bit)
 {
-    uint16_t state = ce->enc_state;
+    convcode_state state = ce->enc_state;
     ce->enc_state = ce->next_state[bit][state];
     return output_bits(ce, &ce->enc_out,
 		       ce->convert[bit][state], ce->num_polys);
@@ -374,7 +375,7 @@ hamming_distance(unsigned int v1, unsigned int v2)
 }
 
 static int
-get_prev_bit(struct convcode *ce, uint16_t pstate, uint16_t cstate)
+get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
 {
     if (ce->next_state[0][pstate] == cstate)
 	return 0;
@@ -400,7 +401,7 @@ decode_bits(struct convcode *ce, unsigned int bits)
 	return 1;
 
     for (i = 0; i < ce->num_states; i++) {
-	uint16_t pstate1 = i >> 1, pstate2, bit;
+	convcode_state pstate1 = i >> 1, pstate2, bit;
 	unsigned int dist1, dist2;
 
 	/*
@@ -521,7 +522,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 
     /* Go backwards through the trellis to find the full path. */
     for (i = ce->ctrellis; i > 0; ) {
-	uint16_t pstate; /* Previous state */
+	convcode_state pstate; /* Previous state */
 
 	i--;
 	pstate = trellis_entry(ce, i, cstate);
@@ -679,8 +680,8 @@ handle_test_output(struct convcode *ce, void *output_data, unsigned char byte,
 }
 
 static unsigned int
-run_test(unsigned int k, uint16_t *polys, unsigned int npolys, bool do_tail,
-	 const char *encoded, const char *decoded,
+run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
+	 bool do_tail, const char *encoded, const char *decoded,
 	 unsigned int expected_errs)
 {
     struct test_data t;
@@ -734,7 +735,7 @@ run_test(unsigned int k, uint16_t *polys, unsigned int npolys, bool do_tail,
 }
 
 static unsigned int
-rand_test(unsigned int k, uint16_t *polys, unsigned int npolys,
+rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	  bool do_tail, bool recursive)
 {
     struct test_data t;
@@ -788,7 +789,7 @@ run_tests(bool do_tail)
     srand(time(NULL));
 
     {
-	uint16_t polys[2] = { 5, 7 };
+	convcode_state polys[2] = { 5, 7 };
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail,
 			     "0011010010011011110100011100110111",
@@ -807,7 +808,7 @@ run_tests(bool do_tail)
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
     {
-	uint16_t polys[2] = { 3, 7 };
+	convcode_state polys[2] = { 3, 7 };
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail,
 			     "0111101000110000", "101100", 0);
@@ -818,7 +819,7 @@ run_tests(bool do_tail)
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
     {
-	uint16_t polys[2] = { 5, 3 };
+	convcode_state polys[2] = { 5, 3 };
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail,
 			     "100111101110010111", "1001101", 0);
@@ -833,11 +834,11 @@ run_tests(bool do_tail)
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
     { /* Voyager */
-	uint16_t polys[2] = { 0171, 0133 };
+	convcode_state polys[2] = { 0171, 0133 };
 	errs += rand_test(7, polys, 2, do_tail, false);
     }
     { /* LTE */
-	uint16_t polys[3] = { 0117, 0127, 0155 };
+	convcode_state polys[3] = { 0117, 0127, 0155 };
 	if (do_tail) {
 	    errs += run_test(7, polys, 3, do_tail,
 			     "111001101011100110011101111111100110001111",
@@ -856,11 +857,11 @@ run_tests(bool do_tail)
 	errs += rand_test(7, polys, 3, do_tail, false);
     }
     { /* CDMA 2000 */
-	uint16_t polys[4] = { 0671, 0645, 0473, 0537 };
+	convcode_state polys[4] = { 0671, 0645, 0473, 0537 };
 	errs += rand_test(9, polys, 4, do_tail, false);
     }
     { /* Cassini / Mars Pathfinder */
-	uint16_t polys[7] = { 074000, 046321, 051271, 070535,
+	convcode_state polys[7] = { 074000, 046321, 051271, 070535,
 	    063667, 073277, 076513 };
 	errs += rand_test(15, polys, 7, do_tail, false);
     }
@@ -869,15 +870,15 @@ run_tests(bool do_tail)
      * https://en.wikipedia.org/wiki/Convolutional_code#Recursive_and_non-recursive_codes.
      */
     {
-	uint16_t polys[2] = { 5, 5 };
+	convcode_state polys[2] = { 5, 5 };
 	errs += rand_test(3, polys, 2, do_tail, true);
     }
     { /* Constituent code in 3GPP 25.212 Turbo Code */
-	uint16_t polys[2] = { 012, 015 };
+	convcode_state polys[2] = { 012, 015 };
 	errs += rand_test(4, polys, 2, do_tail, true);
     }
     {
-	uint16_t polys[2] = { 022, 021 };
+	convcode_state polys[2] = { 022, 021 };
 	errs += rand_test(5, polys, 2, do_tail, true);
     }
 
@@ -888,7 +889,7 @@ run_tests(bool do_tail)
 int
 main(int argc, char *argv[])
 {
-    uint16_t polys[16];
+    convcode_state polys[CONVCODE_MAX_POLYNOMIALS];
     unsigned int num_polys = 0;
     unsigned int k;
     struct convcode *ce;
@@ -924,7 +925,7 @@ main(int argc, char *argv[])
 	    }
 	    init_val = strtoul(argv[arg], NULL, 0);
 	} else if (strcmp(argv[arg], "-p") == 0) {
-	    if (num_polys == 16) {
+	    if (num_polys == CONVCODE_MAX_POLYNOMIALS) {
 		fprintf(stderr, "Too many polynomials\n");
 		return 1;
 	    }
@@ -954,8 +955,9 @@ main(int argc, char *argv[])
     }
 
     k = strtoul(argv[arg++], NULL, 0);
-    if (k == 0 || k > 16) {
-	fprintf(stderr, "Constraint (k) must be from 1 to 16\n");
+    if (k == 0 || k > CONVCODE_MAX_POLYNOMIALS) {
+	fprintf(stderr, "Constraint (k) must be from 1 to %d\n",
+		CONVCODE_MAX_POLYNOMIALS);
 	return 1;
     }
 
