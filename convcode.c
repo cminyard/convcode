@@ -9,6 +9,8 @@
 
 #include "convcode.h"
 
+#define CONVCODE_DEBUG_STATES 0
+
 /*
  * The trellis is a two-dimensional matrix, but the size is dynamic
  * based upon how it is created.  So we use a one-dimensional matrix
@@ -205,6 +207,21 @@ setup_convcode2(struct convcode *ce)
 	    ce->next_state[1][i] = ((i << 1) | bval1) & state_mask;
 	}
     }
+#if CONVCODE_DEBUG_STATES
+    printf("S0:");
+    for (i = 0; i < ce->num_states; i++)
+	printf(" %4.4d", ce->next_state[0][i]);
+    printf("\nS1:");
+    for (i = 0; i < ce->num_states; i++)
+	printf(" %4.4d", ce->next_state[1][i]);
+    printf("\nC0:");
+    for (i = 0; i < ce->num_states; i++)
+	printf(" %4.4d", ce->convert[0][i]);
+    printf("\nC1:");
+    for (i = 0; i < ce->num_states; i++)
+	printf(" %4.4d", ce->convert[1][i]);
+    printf("\n");
+#endif
 }
 
 struct convcode *
@@ -458,7 +475,7 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 	    nextp[i] = dist1;
 	}
     }
-#if 0
+#if CONVCODE_DEBUG_STATES
     printf("T(%u) %x\n", ce->ctrellis, bits);
     for (i = 0; i < ce->num_states; i++) {
 	printf(" %4.4u", trellis_entry(ce, ce->ctrellis, i));
@@ -707,6 +724,8 @@ do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
 	    convdecode_data(ce, &byte, 8, uncertainty);
 	    nbits = 0;
 	    byte = 0;
+	    if (uncertainty)
+		uncertainty += 8;
 	}
     }
     if (nbits > 0)
@@ -890,7 +909,7 @@ run_tests(bool do_tail)
 			     "110111101100010111", "1001101", 2, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
 			     "100111101110010111", "1001101",
-			     200, uncertainties);
+			     100, uncertainties);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail,
 			     "10011110111001", "1001101", 0, NULL);
@@ -898,7 +917,7 @@ run_tests(bool do_tail)
 			     "11011110110001", "1001101", 2, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
 			     "10011110111001", "1001101",
-			     200, uncertainties);
+			     100, uncertainties);
 	}
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
@@ -913,11 +932,11 @@ run_tests(bool do_tail)
 	if (do_tail) {
 	    errs += run_test(7, polys, 2, do_tail,
 			     "0011100010011010100111011100", "01011010",
-			     300, uncertainties);
+			     100, uncertainties);
 	} else {
 	    errs += run_test(7, polys, 2, do_tail,
 			     "0011100010011010", "01011010",
-			     200, uncertainties);
+			     100, uncertainties);
 	}
 	errs += rand_test(7, polys, 2, do_tail, false);
     }
