@@ -582,6 +582,7 @@ extract_bits(const unsigned char *bytes, unsigned int curr, unsigned int nbits)
 	opos += byte_avail;
 	bit = 0;
 	byte_avail = 8;
+	bytes++;
     }
     if (bits_left)
 	v |= ((unsigned int) (bytes[pos] >> bit)) << opos;
