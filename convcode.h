@@ -181,13 +181,16 @@ void set_encode_output_per_symbol(struct convcode *ce, bool val);
  * When using soft decoding, them meaning of num_errs from
  * convdecode_finish() changes.  It is no longer a count of errors, it
  * is instead a rating of uncertainty.
+ *
+ * See convdecode_block() for a way to get the full set of
+ * uncertainties for each output bit, for a BCJR type algorithm.
  */
 void set_decode_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty);
 
 /*
  * Feed some data into encoder.  The size is given in bits, the data
- * goes in low bit first.  The last byte may not be completely full,
- * and that's fine, it will only use the low nbits % 8.
+ * goes in low bit first.  The last byte does not have to be completely
+ * full, and that's fine, it will only use the low nbits % 8.
  *
  * You can feed data in with multiple calls.  Returns an error
  */
@@ -203,6 +206,17 @@ int convencode_data(struct convcode *ce,
  * returned here.
  */
 int convencode_finish(struct convcode *ce, unsigned int *total_out_bits);
+
+/*
+ * Encode a block of data bits.  The output bits are stored in
+ * outbytes, which must be large enough to hold the full encoded
+ * output.  If tail is set, then this will be ((nbits + k - 1) *
+ * num_polynomials).  If tail is not set, this will be (nbits *
+ * num_polynomials).  The output function is not used in this case.
+ */
+void convencode_block(struct convcode *ce,
+		      const unsigned char *bytes, unsigned int nbits,
+		      unsigned char *outbytes);
 
 /*
  * Feed some data into decoder.  The size is given in bits, the data
@@ -233,6 +247,41 @@ int convdecode_data(struct convcode *ce,
  */
 int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 		      unsigned int *num_errs);
+
+/*
+ * Much like convdecode_data() and convdecode_finish(), but does a
+ * full block all at once and does not use the output function.  See
+ * convdecode_data for an explaination of the first four parameters.
+ *
+ * The output data is stored in outbits, in the normal bit format
+ * everything else uses.  With a tail, the output array must be at
+ * least (nbits / num_polynomials - k - 1) *bits* long.  If tail is
+ * off, it must be (nbits / num_polynomials) long.
+ *
+ * If output_uncertainty is not NULL, the uncertainty of each output
+ * bit is stored in this array.  It must be the same length as the
+ * number of bits in outbytes.  This is basically a full BCJR
+ * algorithm; the output uncertainty can be used to compute the
+ * probabilities of each output bit.  (Output uncertainties are not
+ * provided in the standard output routine because that would require
+ * keeping a lot of extra data in the convcode structure.  You would
+ * only really use this if you were using blocks, anyway, so there's
+ * no value in having it in the output routine.)
+ *
+ * The output uncertainty for each bit is the total uncertainty value
+ * for all bits up to that point.  To convert that to an uncertainty
+ * value for just that bit, you would use:
+ *
+ *   bit_uncertainty = ((uncertainty * num_polynomials) / bit_position)
+ *
+ * which should give you a value from 0 - 100.  You can, of course,
+ * take that anddo (100 - bit_uncertainty) to get the certainty, or
+ * probability.  This is assuming the max_uncertainty is 100, of
+ * course, you would need to adjust if you changed that.
+ */
+int convdecode_block(struct convcode *ce, const unsigned char *bytes,
+		     unsigned int nbits, const uint8_t *uncertainty,
+		     unsigned char *outbytes, unsigned int *output_uncertainty);
 
     
 /***********************************************************************
@@ -284,9 +333,9 @@ struct convcode {
     struct convcode_outdata dec_out;
 
     /*
-     * Used to report output bytes as they are collected for encoding.
-     * The last time this is called from convencode_finish() nbits may
-     * be < 8.
+     * Used to report output bytes as they are collected after encoding
+     * or decoding.  The last time this is called from convencode_finish()
+     * or convdecode_finish() nbits may be < 8.
      */
     convcode_output enc_output;
     void *enc_user_data;

@@ -382,6 +382,66 @@ convencode_finish(struct convcode *ce, unsigned int *total_out_bits)
     return 0;
 }
 
+static void
+convencode_block_bit(struct convcode *ce, unsigned int bit,
+		     unsigned char **ioutbytes,
+		     unsigned int *ioutbitpos)
+{
+    unsigned int outbits, bits_left;
+    convcode_state state = ce->enc_state;
+    unsigned char *outbytes = *ioutbytes;
+    unsigned int outbitpos = *ioutbitpos;
+    unsigned int nbytebits = 8 - outbitpos;
+
+    ce->enc_state = ce->next_state[bit][state];
+
+    outbits = ce->convert[bit][state];
+    bits_left = ce->num_polys;
+
+    /* Now comes the messy job of putting the bits into outbytes. */
+    while (bits_left > nbytebits) {
+	/* Bits going into this byte. */
+	unsigned int cbits = outbits & ((1 << nbytebits) - 1);
+
+	*outbytes++ |= cbits << outbitpos;
+	outbitpos = 0;
+	outbits >>= nbytebits;
+	bits_left -= nbytebits;
+	nbytebits = 8 - outbitpos;
+    }
+    *outbytes |= outbits << outbitpos;
+    outbitpos += bits_left;
+    if (outbitpos >= 8) {
+	outbytes++;
+	outbitpos = 0;
+    }
+    *ioutbytes = outbytes;
+    *ioutbitpos = outbitpos;
+}
+
+void
+convencode_block(struct convcode *ce,
+		 const unsigned char *bytes, unsigned int nbits,
+		 unsigned char *outbytes)
+{
+    unsigned int i, j, outbitpos = 0;
+
+    for (i = 0; nbits > 0; i++) {
+	unsigned char byte = bytes[i];
+
+	for (j = 0; nbits > 0 && j < 8; j++) {
+	    convencode_block_bit(ce, byte & 1, &outbytes, &outbitpos);
+
+	    nbits--;
+	    byte >>= 1;
+	}
+    }
+    if (ce->do_tail) {
+	for (i = 0; i < ce->k - 1; i++)
+	    convencode_block_bit(ce, 0, &outbytes, &outbitpos);
+    }
+}
+
 static unsigned int
 num_bits_set(unsigned int v)
 {
@@ -394,7 +454,14 @@ num_bits_set(unsigned int v)
     return count;
 }
 
-/* Number of bits that are different between v1 and v2. */
+/*
+ * This returns how far we think we are away from the actual value.
+ * When not using uncertainties, this is the mumber of bits that are
+ * different between v1 and v2.  When using uncertainties, if the bits
+ * are the same we use the uncertainty of the bits being correct.  If
+ * the bits are different, we use the uncertainty of the bits being
+ * different (which is 100% - uncertainty).
+ */
 static unsigned int
 hamming_distance(struct convcode *ce, unsigned int v1, unsigned int v2,
 		 const uint8_t *uncertainty)
@@ -416,6 +483,12 @@ hamming_distance(struct convcode *ce, unsigned int v1, unsigned int v2,
     return rv;
 }
 
+/*
+ * Return the bit that got us here from pstate (prev state) to cstate
+ * (curr state).  For non-recursive mode, that's always the low bit of
+ * cstate.  For recursive mode, you have to look at pstate to see what
+ * it's next state is for each bit.
+ */
 static int
 get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
 {
@@ -491,6 +564,9 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
     return 0;
 }
 
+/*
+ * Extract nbits bits from bytes at offset curr.
+ */
 static unsigned int
 extract_bits(const unsigned char *bytes, unsigned int curr, unsigned int nbits)
 {
@@ -626,6 +702,70 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
     return 0;
 }
 
+int
+convdecode_block(struct convcode *ce, const unsigned char *bytes,
+		 unsigned int nbits, const uint8_t *uncertainty,
+		 unsigned char *outbytes, unsigned int *output_uncertainty)
+{
+    unsigned int i, extra_bits = 0;
+    unsigned int min_val, cuncertainty, cstate;
+
+    if (convdecode_data(ce, bytes, nbits, uncertainty))
+	return 1;
+
+    /* Find the minimum value in the final path. */
+    min_val = ce->curr_path_values[0];
+    cstate = 0;
+    for (i = 1; i < ce->num_states; i++) {
+	if (ce->curr_path_values[i] < min_val) {
+	    cstate = i;
+	    min_val = ce->curr_path_values[i];
+	}
+    }
+
+    /* Go backwards through the trellis to find the full path. */
+    if (ce->do_tail)
+	extra_bits = ce->k - 1;
+    cuncertainty = min_val;
+    for (i = ce->ctrellis; i > 0; ) {
+	convcode_state pstate; /* Previous state */
+	unsigned int bit, bits, inpos;
+	const uint8_t *u = NULL;
+
+	i--;
+	pstate = trellis_entry(ce, i, cstate);
+	bit = get_prev_bit(ce, pstate, cstate);
+
+	/*
+	 * Store the bit values in the user-supplied data.
+	 */
+	if (extra_bits == 0)
+	    outbytes[i / 8] |= bit << (i % 8);
+
+	if (output_uncertainty) {
+	    if (extra_bits == 0)
+		output_uncertainty[i] = cuncertainty;
+
+	    /*
+	     * Subtract off the distance we had computed to here to get the
+	     * previous uncertainty value.
+	     */
+	    inpos = i * ce->num_polys;
+	    bits = extract_bits(bytes, inpos, ce->num_polys);
+	    if (uncertainty)
+		u = uncertainty + inpos;
+	    cuncertainty -= hamming_distance(ce, ce->convert[bit][pstate],
+					     bits, u);
+	}
+	if (extra_bits > 0)
+	    extra_bits--;
+
+	cstate = pstate;
+    }
+
+    return 0;
+}
+
 #ifdef CONVCODE_TESTS
 
 /*
@@ -734,6 +874,8 @@ do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
 
 struct test_data {
     char output[1024];
+    unsigned char enc_bytes[1024];
+    unsigned char dec_bytes[1024];
     unsigned int outpos;
 };
 
@@ -765,7 +907,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 					 do_tail, false,
 					 handle_test_output, &t,
 					 handle_test_output, &t);
-    unsigned int i, total_bits, num_errs, rv = 0;
+    unsigned int i, enc_nbits, dec_nbits, num_errs, rv = 0;
 
     printf("Test k=%u err=%u polys={ 0%o", k, expected_errs, polys[0]);
     for (i = 1; i < npolys; i++)
@@ -773,7 +915,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     printf(" }\n");
     t.outpos = 0;
     if (expected_errs == 0) {
-	do_encode_data(ce, decoded, &total_bits);
+	do_encode_data(ce, decoded, &enc_nbits);
 	t.output[t.outpos] = '\0';
 	if (strcmp(encoded, t.output) != 0) {
 	    printf("  encode failure, expected\n    %s\n  got\n    %s\n",
@@ -781,14 +923,14 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	    rv = 1;
 	    goto out;
 	}
-	if (total_bits != strlen(encoded)) {
+	if (enc_nbits != strlen(encoded)) {
 	    printf("  encode failure, got %u output bits, expected %u\n",
-		   total_bits, (unsigned int) strlen(encoded));
+		   enc_nbits, (unsigned int) strlen(encoded));
 	    rv++;
 	}
 	t.outpos = 0;
     }
-    do_decode_data(ce, encoded, &total_bits, &num_errs, uncertainty);
+    do_decode_data(ce, encoded, &dec_nbits, &num_errs, uncertainty);
     t.output[t.outpos] = '\0';
     if (strcmp(decoded, t.output) != 0) {
 	printf("  decode failure, expected\n    %s\n  got\n    %s\n",
@@ -800,11 +942,61 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	       num_errs, expected_errs);
 	rv++;
     }
-    if (total_bits != strlen(decoded)) {
+    if (dec_nbits != strlen(decoded)) {
 	printf("  decode failure, got %u output bits, expected %u\n",
-	       total_bits, (unsigned int) strlen(decoded));
+	       dec_nbits, (unsigned int) strlen(decoded));
 	rv++;
     }
+    if (rv)
+	goto out;
+
+    reinit_convcode(ce);
+    memset(t.enc_bytes, 0, sizeof(t.enc_bytes));
+    memset(t.dec_bytes, 0, sizeof(t.dec_bytes));
+    if (expected_errs == 0) {
+	for (i = 0, dec_nbits = 0; decoded[i]; i++, dec_nbits++) {
+	    unsigned int bit = decoded[i] == '0' ? 0 : 1;
+	    t.dec_bytes[i / 8] |= bit << (i % 8);
+	}
+	enc_nbits = dec_nbits;
+	if (do_tail)
+	    enc_nbits += k - 1;
+	enc_nbits *= npolys;
+
+	convencode_block(ce, t.dec_bytes, dec_nbits, t.enc_bytes);
+	for (i = 0; i < enc_nbits; i++) {
+	    unsigned int bit = encoded[i] == '0' ? 0 : 1;
+
+	    if (((t.enc_bytes[i / 8] >> (i % 8)) & 1) != bit) {
+		printf("  block encode failure at bit %u\n", i);
+		rv++;
+		goto out;
+	    }
+	}
+    } else {
+	for (i = 0, enc_nbits = 0; encoded[i]; i++, enc_nbits++) {
+	    unsigned int bit = encoded[i] == '0' ? 0 : 1;
+	    t.enc_bytes[i / 8] |= bit << (i % 8);
+	}
+    }
+
+    memset(t.dec_bytes, 0, sizeof(t.dec_bytes));
+    if (convdecode_block(ce, t.enc_bytes, enc_nbits, uncertainty,
+			 t.dec_bytes, NULL)) {
+	printf("  block decode error return\n");
+	rv++;
+	goto out;
+    }
+    for (i = 0; i < dec_nbits; i++) {
+	unsigned int bit = decoded[i] == '0' ? 0 : 1;
+
+	if (((t.dec_bytes[i / 8] >> (i % 8)) & 1) != bit) {
+	    printf("  block decode failure at bit %u\n", i);
+	    rv++;
+	    goto out;
+	}
+    }
+
  out:
     free_convcode(ce);
     return rv;
