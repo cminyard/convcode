@@ -876,6 +876,7 @@ struct test_data {
     char output[1024];
     unsigned char enc_bytes[1024];
     unsigned char dec_bytes[1024];
+    unsigned int uncertainties[1024];
     unsigned int outpos;
 };
 
@@ -900,7 +901,8 @@ handle_test_output(struct convcode *ce, void *output_data, unsigned char byte,
 static unsigned int
 run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	 bool do_tail, const char *encoded, const char *decoded,
-	 unsigned int expected_errs, uint8_t *uncertainty)
+	 unsigned int expected_errs, uint8_t *uncertainty,
+	 unsigned int *out_uncertainties)
 {
     struct test_data t;
     struct convcode *ce = alloc_convcode(k, polys, npolys, 128,
@@ -952,8 +954,8 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 
     reinit_convcode(ce);
     memset(t.enc_bytes, 0, sizeof(t.enc_bytes));
-    memset(t.dec_bytes, 0, sizeof(t.dec_bytes));
     if (expected_errs == 0) {
+	memset(t.dec_bytes, 0, sizeof(t.dec_bytes));
 	for (i = 0, dec_nbits = 0; decoded[i]; i++, dec_nbits++) {
 	    unsigned int bit = decoded[i] == '0' ? 0 : 1;
 	    t.dec_bytes[i / 8] |= bit << (i % 8);
@@ -982,7 +984,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 
     memset(t.dec_bytes, 0, sizeof(t.dec_bytes));
     if (convdecode_block(ce, t.enc_bytes, enc_nbits, uncertainty,
-			 t.dec_bytes, NULL)) {
+			 t.dec_bytes, t.uncertainties)) {
 	printf("  block decode error return\n");
 	rv++;
 	goto out;
@@ -992,6 +994,11 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 
 	if (((t.dec_bytes[i / 8] >> (i % 8)) & 1) != bit) {
 	    printf("  block decode failure at bit %u\n", i);
+	    rv++;
+	    goto out;
+	}
+	if (out_uncertainties && (t.uncertainties[i] != out_uncertainties[i])) {
+	    printf("  block decode invalid uncertainty at bit %u\n", i);
 	    rv++;
 	    goto out;
 	}
@@ -1058,20 +1065,23 @@ run_tests(bool do_tail)
 
     {
 	convcode_state polys[2] = { 5, 7 };
+	static unsigned int out_uncertainties[15] = {
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1
+	};
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail,
 			     "0011010010011011110100011100110111",
-			     "010111001010001", 0, NULL);
+			     "010111001010001", 0, NULL, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
 			     "0011010010011011110000011100110111",
-			     "010111001010001", 1, NULL);
+			     "010111001010001", 1, NULL, out_uncertainties);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail,
 			     "001101001001101111010001110011",
-			     "010111001010001", 0, NULL);
+			     "010111001010001", 0, NULL, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
 			     "001101001001101111000001110011",
-			     "010111001010001", 1, NULL);
+			     "010111001010001", 1, NULL, out_uncertainties);
 	}
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
@@ -1079,10 +1089,10 @@ run_tests(bool do_tail)
 	convcode_state polys[2] = { 3, 7 };
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail,
-			     "0111101000110000", "101100", 0, NULL);
+			     "0111101000110000", "101100", 0, NULL, NULL);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail,
-			     "011110100011", "101100", 0, NULL);
+			     "011110100011", "101100", 0, NULL, NULL);
 	}
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
@@ -1093,22 +1103,30 @@ run_tests(bool do_tail)
 	    0, 0, 0, 0, 0, 0, 0, 0,
 	    0, 0,
 	};
+	static unsigned int out_uncertainties1[7] = {
+	    1, 1, 1, 1, 1, 2, 2
+	};
+	static unsigned int out_uncertainties2[7] = {
+	    0, 100, 100, 100, 100, 100, 100
+	};
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail,
-			     "100111101110010111", "1001101", 0, NULL);
+			     "100111101110010111", "1001101", 0, NULL, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
-			     "110111101100010111", "1001101", 2, NULL);
+			     "110111101100010111", "1001101", 2, NULL,
+			     out_uncertainties1);
 	    errs += run_test(3, polys, 2, do_tail,
 			     "100111101110010111", "1001101",
-			     100, uncertainties);
+			     100, uncertainties, out_uncertainties2);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail,
-			     "10011110111001", "1001101", 0, NULL);
+			     "10011110111001", "1001101", 0, NULL, NULL);
 	    errs += run_test(3, polys, 2, do_tail,
-			     "11011110110001", "1001101", 2, NULL);
+			     "11011110110001", "1001101", 2, NULL,
+			     out_uncertainties1);
 	    errs += run_test(3, polys, 2, do_tail,
 			     "10011110111001", "1001101",
-			     100, uncertainties);
+			     100, uncertainties, out_uncertainties2);
 	}
 	errs += rand_test(3, polys, 2, do_tail, false);
     }
@@ -1120,33 +1138,42 @@ run_tests(bool do_tail)
 	    0, 0, 0, 0, 0, 0, 0, 0,
 	    0, 0, 0, 0
 	};
+	static unsigned int out_uncertainties[8] = {
+	    0, 0, 100, 100, 100, 100, 100, 100
+	};
 	if (do_tail) {
 	    errs += run_test(7, polys, 2, do_tail,
 			     "0011100010011010100111011100", "01011010",
-			     100, uncertainties);
+			     100, uncertainties, out_uncertainties);
 	} else {
 	    errs += run_test(7, polys, 2, do_tail,
 			     "0011100010011010", "01011010",
-			     100, uncertainties);
+			     100, uncertainties, out_uncertainties);
 	}
 	errs += rand_test(7, polys, 2, do_tail, false);
     }
     { /* LTE */
 	convcode_state polys[3] = { 0117, 0127, 0155 };
+	static unsigned int out_uncertainties1[8] = {
+	    2, 2, 2, 2, 2, 2, 2, 3
+	};
+	static unsigned int out_uncertainties2[8] = {
+	    2, 2, 2, 3, 3, 4, 4, 4
+	};
 	if (do_tail) {
 	    errs += run_test(7, polys, 3, do_tail,
 			     "111001101011100110011101111111100110001111",
-			     "10110111", 0, NULL);
+			     "10110111", 0, NULL, NULL);
 	    errs += run_test(7, polys, 3, do_tail,
-			     "001001101011100110011101011111100110001011",
-			     "10110111", 4, NULL);
+			     "001001101011100110011100111111100110001011",
+			     "10110111", 4, NULL, out_uncertainties1);
 	} else {
 	    errs += run_test(7, polys, 3, do_tail,
 			     "111001101011100110011101",
-			     "10110111", 0, NULL);
+			     "10110111", 0, NULL, NULL);
 	    errs += run_test(7, polys, 3, do_tail,
 			     "001001101010100010011101",
-			     "10110111", 4, NULL);
+			     "10110111", 4, NULL, out_uncertainties2);
 	}
 	errs += rand_test(7, polys, 3, do_tail, false);
     }
