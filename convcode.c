@@ -419,6 +419,9 @@ hamming_distance(struct convcode *ce, unsigned int v1, unsigned int v2,
 static int
 get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
 {
+    if (!ce->recursive)
+	return cstate & 1;
+
     if (ce->next_state[0][pstate] == cstate)
 	return 0;
     else
@@ -430,10 +433,6 @@ get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
     else
 	printf("ERR!: %x %x %x %x\n", pstate, cstate);
     return 0;
-#endif
-#if 0
-    /* If not doing recursive, this is sufficient. */
-    return cstate & 1;
 #endif
 }
 
