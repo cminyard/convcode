@@ -802,7 +802,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *   00110011
  *   errors = 0
  *   bits = 8
- * 
+ *
  * The tests themselves are stolen from
  * https://github.com/xukmin/viterbi.git
  */
@@ -1011,6 +1011,57 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 }
 
 static unsigned int
+rand_block_test(struct convcode *ce,
+		const char *encoded, const char *decoded)
+{
+    struct test_data t;
+    unsigned int i, dec_nbits, enc_nbits;
+    unsigned int rv;
+
+    reinit_convcode(ce);
+    memset(t.enc_bytes, 0, sizeof(t.enc_bytes));
+    memset(t.dec_bytes, 0, sizeof(t.dec_bytes));
+    for (i = 0, dec_nbits = 0; decoded[i]; i++, dec_nbits++) {
+	unsigned int bit = decoded[i] == '0' ? 0 : 1;
+	t.dec_bytes[i / 8] |= bit << (i % 8);
+    }
+    enc_nbits = dec_nbits;
+    if (ce->do_tail)
+	enc_nbits += ce->k - 1;
+    enc_nbits *= ce->num_polys;
+
+    convencode_block(ce, t.dec_bytes, dec_nbits, t.enc_bytes);
+    for (i = 0; i < enc_nbits; i++) {
+	unsigned int bit = encoded[i] == '0' ? 0 : 1;
+
+	if (((t.enc_bytes[i / 8] >> (i % 8)) & 1) != bit) {
+	    printf("  block encode failure at bit %u\n", i);
+	    rv++;
+	    goto out;
+	}
+    }
+
+    memset(t.dec_bytes, 0, sizeof(t.dec_bytes));
+    if (convdecode_block(ce, t.enc_bytes, enc_nbits, NULL,
+			 t.dec_bytes, NULL)) {
+	printf("  block decode error return\n");
+	rv++;
+	goto out;
+    }
+    for (i = 0; i < dec_nbits; i++) {
+	unsigned int bit = decoded[i] == '0' ? 0 : 1;
+
+	if (((t.dec_bytes[i / 8] >> (i % 8)) & 1) != bit) {
+	    printf("  block decode failure at bit %u\n", i);
+	    rv++;
+	    goto out;
+	}
+    }
+ out:
+    return rv;
+}
+
+static unsigned int
 rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	  bool do_tail, bool recursive)
 {
@@ -1052,6 +1103,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 		       decoded, t.output);
 		rv++;
 	    }
+	    rv += rand_block_test(ce, encoded, decoded);
 	}
     }
     free_convcode(ce);
