@@ -107,12 +107,15 @@ void free_convcode(struct convcode *ce);
  * starting at zero.  The beginning bits will probably be wrong, but
  * by the end it will be aligned and you can get the final bits.  Then
  * you can re-run the algorithm with the start state set properly from
- * the final bits.
+ * the final bits.  I'm not 100% sure how reliable that is, but it
+ * seems to work pretty well.  The other option is to run it multiple
+ * time with starting state from 0 to k-1 and choose the minimum
+ * value.
  *
  * If doing tail biting, set do_tail to false when you allocate the
  * coder.  You must then use the reinit_convencode() set the start
  * value for encoding.  Grab the last k - 1 bits of the data and put
- * them into the start state.
+ * them into the start state parameter.
  *
  * On the decode side, first run with the start_state to 0 and
  * init_other_paths to a smaller number like 256.  Then determine the
