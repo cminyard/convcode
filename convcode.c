@@ -706,7 +706,8 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 int
 convdecode_block(struct convcode *ce, const unsigned char *bytes,
 		 unsigned int nbits, const uint8_t *uncertainty,
-		 unsigned char *outbytes, unsigned int *output_uncertainty)
+		 unsigned char *outbytes, unsigned int *output_uncertainty,
+		 unsigned int *num_errs)
 {
     unsigned int i, extra_bits = 0;
     unsigned int min_val, cuncertainty, cstate;
@@ -763,6 +764,9 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 
 	cstate = pstate;
     }
+
+    if (num_errs)
+	*num_errs = min_val;
 
     return 0;
 }
@@ -985,10 +989,15 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 
     memset(t.dec_bytes, 0, sizeof(t.dec_bytes));
     if (convdecode_block(ce, t.enc_bytes, enc_nbits, uncertainty,
-			 t.dec_bytes, t.uncertainties)) {
+			 t.dec_bytes, t.uncertainties, &num_errs)) {
 	printf("  block decode error return\n");
 	rv++;
 	goto out;
+    }
+    if (num_errs != expected_errs) {
+	printf("  decode failure, got %u errors, expected %u\n",
+	       num_errs, expected_errs);
+	rv++;
     }
     for (i = 0; i < dec_nbits; i++) {
 	unsigned int bit = decoded[i] == '0' ? 0 : 1;
@@ -1043,7 +1052,7 @@ rand_block_test(struct convcode *ce,
 
     memset(t.dec_bytes, 0, sizeof(t.dec_bytes));
     if (convdecode_block(ce, t.enc_bytes, enc_nbits, NULL,
-			 t.dec_bytes, NULL)) {
+			 t.dec_bytes, NULL, NULL)) {
 	printf("  block decode error return\n");
 	rv++;
 	goto out;

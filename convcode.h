@@ -284,7 +284,8 @@ int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  */
 int convdecode_block(struct convcode *ce, const unsigned char *bytes,
 		     unsigned int nbits, const uint8_t *uncertainty,
-		     unsigned char *outbytes, unsigned int *output_uncertainty);
+		     unsigned char *outbytes, unsigned int *output_uncertainty,
+		     unsigned int *num_errs);
 
     
 /***********************************************************************
