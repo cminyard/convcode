@@ -420,26 +420,44 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
 }
 
 void
-convencode_block(struct convcode *ce,
-		 const unsigned char *bytes, unsigned int nbits,
-		 unsigned char *outbytes)
+convencode_block_partial(struct convcode *ce,
+			 const unsigned char *bytes, unsigned int nbits,
+			 unsigned char **outbytes, unsigned int *outbitpos)
 {
-    unsigned int i, j, outbitpos = 0;
+    unsigned int i, j;
 
     for (i = 0; nbits > 0; i++) {
 	unsigned char byte = bytes[i];
 
 	for (j = 0; nbits > 0 && j < 8; j++) {
-	    convencode_block_bit(ce, byte & 1, &outbytes, &outbitpos);
+	    convencode_block_bit(ce, byte & 1, outbytes, outbitpos);
 
 	    nbits--;
 	    byte >>= 1;
 	}
     }
+}
+
+void
+convencode_block_final(struct convcode *ce,
+		       const unsigned char *bytes, unsigned int nbits,
+		       unsigned char *outbytes, unsigned int outbitpos)
+{
+    unsigned int i;
+
+    convencode_block_partial(ce, bytes, nbits, &outbytes, &outbitpos);
     if (ce->do_tail) {
 	for (i = 0; i < ce->k - 1; i++)
 	    convencode_block_bit(ce, 0, &outbytes, &outbitpos);
     }
+}
+
+void
+convencode_block(struct convcode *ce,
+		 const unsigned char *bytes, unsigned int nbits,
+		 unsigned char *outbytes)
+{
+    convencode_block_final(ce, bytes, nbits, outbytes, 0);
 }
 
 static unsigned int

@@ -216,10 +216,26 @@ int convencode_finish(struct convcode *ce, unsigned int *total_out_bits);
  * output.  If tail is set, then this will be ((nbits + k - 1) *
  * num_polynomials).  If tail is not set, this will be (nbits *
  * num_polynomials).  The output function is not used in this case.
+ * If doing partial blocks, outbitpos is the current output bit position.
+ * Pass in 0 if not using partial blocks, pass in the output of outbitpos
+ * if you are.
  */
 void convencode_block(struct convcode *ce,
 		      const unsigned char *bytes, unsigned int nbits,
 		      unsigned char *outbytes);
+
+/*
+ * For multi-part block operations, you can call convencode_block
+ * partial() for all but the last block, and call
+ * convencode_block_final() for the last one.
+ */
+void convencode_block_partial(struct convcode *ce,
+			      const unsigned char *bytes, unsigned int nbits,
+			      unsigned char **outbytes,
+			      unsigned int *outbitpos);
+void convencode_block_final(struct convcode *ce,
+			    const unsigned char *bytes, unsigned int nbits,
+			    unsigned char *outbytes, unsigned int outbitpos);
 
 /*
  * Feed some data into decoder.  The size is given in bits, the data
