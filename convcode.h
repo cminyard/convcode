@@ -16,6 +16,8 @@
 #include <stdbool.h>
 #include <limits.h>
 
+#include "convcode_os_funcs.h"
+
 /*
  * Maximum number of polynomials. I've never seen one with more than
  * 8, but it doesn't take a lot of space to add a few more.
@@ -72,7 +74,8 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  * If output function returns an error, the operation is stopped and the
  * error will be returned from the various functions.
  */
-struct convcode *alloc_convcode(unsigned int k, convcode_state *polynomials,
+struct convcode *alloc_convcode(convcode_os_funcs *o,
+				unsigned int k, convcode_state *polynomials,
 				unsigned int num_polynomials,
 				unsigned int max_decode_len_bits,
 				bool do_tail, bool recursive,
@@ -423,6 +426,8 @@ struct convcode {
     unsigned int leftover_bits;
     convcode_state leftover_bits_data;
     uint8_t leftover_uncertainty[CONVCODE_MAX_POLYNOMIALS];
+
+    convcode_os_funcs *o;
 };
 
 /*

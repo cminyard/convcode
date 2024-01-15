@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "convcode_os_funcs.h"
 #include "convcode.h"
 
 #define CONVCODE_DEBUG_STATES 0
@@ -97,21 +98,23 @@ num_bits_is_odd(unsigned int v)
 void
 free_convcode(struct convcode *ce)
 {
+    convcode_os_funcs *o = ce->o;
+
     if (ce->convert[0])
-	free(ce->convert[0]);
+	o->free(o, ce->convert[0]);
     if (ce->convert[1])
-	free(ce->convert[1]);
+	o->free(o, ce->convert[1]);
     if (ce->next_state[0])
-	free(ce->next_state[0]);
+	o->free(o, ce->next_state[0]);
     if (ce->next_state[1])
-	free(ce->next_state[1]);
+	o->free(o, ce->next_state[1]);
     if (ce->trellis)
-	free(ce->trellis);
+	o->free(o, ce->trellis);
     if (ce->curr_path_values)
-	free(ce->curr_path_values);
+	o->free(o, ce->curr_path_values);
     if (ce->next_path_values)
-	free(ce->next_path_values);
-    free(ce);
+	o->free(o, ce->next_path_values);
+    o->free(o, ce);
 }
 
 int
@@ -225,7 +228,8 @@ setup_convcode2(struct convcode *ce)
 }
 
 struct convcode *
-alloc_convcode(unsigned int k, convcode_state *polynomials,
+alloc_convcode(convcode_os_funcs *o,
+	       unsigned int k, convcode_state *polynomials,
 	       unsigned int num_polynomials,
 	       unsigned int max_decode_len_bits,
 	       bool do_tail, bool recursive,
@@ -234,49 +238,50 @@ alloc_convcode(unsigned int k, convcode_state *polynomials,
 {
     struct convcode *ce;
 
-    ce = malloc(sizeof(*ce));
+    ce = o->zalloc(o, sizeof(*ce));
     if (!ce)
 	return NULL;
     if (setup_convcode1(ce, k, polynomials, num_polynomials,
 			max_decode_len_bits, do_tail, recursive)) {
-	free(ce);
+	o->free(o, ce);
 	return NULL;
     }
 
+    ce->o = o;
     ce->enc_out.output = enc_output;
     ce->enc_out.user_data = enc_out_user_data;
     ce->dec_out.output = dec_output;
     ce->dec_out.user_data = dec_out_user_data;
 
-    ce->convert[0] = malloc(sizeof(*ce->convert) * ce->num_states);
+    ce->convert[0] = o->zalloc(o, sizeof(*ce->convert) * ce->num_states);
     if (!ce->convert[0])
 	goto out_err;
 
-    ce->convert[1] = malloc(sizeof(*ce->convert) * ce->num_states);
+    ce->convert[1] = o->zalloc(o, sizeof(*ce->convert) * ce->num_states);
     if (!ce->convert[1])
 	goto out_err;
 
-    ce->next_state[0] = malloc(sizeof(*ce->next_state) * ce->num_states);
+    ce->next_state[0] = o->zalloc(o, sizeof(*ce->next_state) * ce->num_states);
     if (!ce->next_state[0])
 	goto out_err;
 
-    ce->next_state[1] = malloc(sizeof(*ce->next_state) * ce->num_states);
+    ce->next_state[1] = o->zalloc(o, sizeof(*ce->next_state) * ce->num_states);
     if (!ce->next_state[1])
 	goto out_err;
 
     if (max_decode_len_bits > 0) {
 	/* Add on a bit for the stuff at the end. */
-	ce->trellis = malloc(sizeof(*ce->trellis) *
-			     ce->trellis_size * ce->num_states);
+	ce->trellis = o->zalloc(o, sizeof(*ce->trellis) *
+				ce->trellis_size * ce->num_states);
 	if (!ce->trellis)
 	    goto out_err;
 
-	ce->curr_path_values = malloc(sizeof(*ce->curr_path_values)
-				      * ce->num_states);
+	ce->curr_path_values = o->zalloc(o, sizeof(*ce->curr_path_values)
+					 * ce->num_states);
 	if (!ce->curr_path_values)
 	    goto out_err;
-	ce->next_path_values = malloc(sizeof(*ce->next_path_values)
-				      * ce->num_states);
+	ce->next_path_values = o->zalloc(o, sizeof(*ce->next_path_values)
+					 * ce->num_states);
 	if (!ce->next_path_values)
 	    goto out_err;
     }
@@ -928,7 +933,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	 unsigned int *out_uncertainties)
 {
     struct test_data t;
-    struct convcode *ce = alloc_convcode(k, polys, npolys, 128,
+    struct convcode *ce = alloc_convcode(o, k, polys, npolys, 128,
 					 do_tail, false,
 					 handle_test_output, &t,
 					 handle_test_output, &t);
@@ -1093,7 +1098,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	  bool do_tail, bool recursive)
 {
     struct test_data t;
-    struct convcode *ce = alloc_convcode(k, polys, npolys, 128,
+    struct convcode *ce = alloc_convcode(o, k, polys, npolys, 128,
 					 do_tail, recursive,
 					 handle_test_output, &t,
 					 handle_test_output, &t);
@@ -1362,7 +1367,7 @@ main(int argc, char *argv[])
 	return 1;
     }
 
-    ce = alloc_convcode(k, polys, num_polys, 128, do_tail, recursive,
+    ce = alloc_convcode(o, k, polys, num_polys, 128, do_tail, recursive,
 			handle_output, NULL,
 			handle_output, NULL);
     if (start_state)
