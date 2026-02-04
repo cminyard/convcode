@@ -20,7 +20,7 @@
 static convcode_state *
 get_trellis_column(struct convcode *ce, unsigned int column)
 {
-    return ce->trellis + column * ce->num_states * sizeof(*ce->trellis);
+    return ce->trellis + column * ce->num_states;
 }
 
 #define trellis_entry(ce, column, row) get_trellis_column(ce, column)[row]
