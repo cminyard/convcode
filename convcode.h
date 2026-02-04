@@ -22,6 +22,7 @@
  * Maximum number of polynomials. I've never seen one with more than
  * 8, but it doesn't take a lot of space to add a few more.
  */
+typedef uint16_t convcode_symsize;
 #define CONVCODE_MAX_POLYNOMIALS 16
 
 struct convcode;
@@ -380,7 +381,7 @@ struct convcode {
      * For the given state, what is the encoded output?  Indexed first
      * by the bit, then by the state.
      */
-    unsigned int *convert[2];
+    convcode_symsize *convert[2];
 
     /*
      * 2D Array indexed first by bit then by current state.

@@ -254,19 +254,19 @@ alloc_convcode(convcode_os_funcs *o,
     ce->dec_out.output = dec_output;
     ce->dec_out.user_data = dec_out_user_data;
 
-    ce->convert[0] = o->zalloc(o, sizeof(*ce->convert) * ce->num_states);
+    ce->convert[0] = o->zalloc(o, sizeof(convcode_symsize) * ce->num_states);
     if (!ce->convert[0])
 	goto out_err;
 
-    ce->convert[1] = o->zalloc(o, sizeof(*ce->convert) * ce->num_states);
+    ce->convert[1] = o->zalloc(o, sizeof(convcode_symsize) * ce->num_states);
     if (!ce->convert[1])
 	goto out_err;
 
-    ce->next_state[0] = o->zalloc(o, sizeof(*ce->next_state) * ce->num_states);
+    ce->next_state[0] = o->zalloc(o, sizeof(convcode_state) * ce->num_states);
     if (!ce->next_state[0])
 	goto out_err;
 
-    ce->next_state[1] = o->zalloc(o, sizeof(*ce->next_state) * ce->num_states);
+    ce->next_state[1] = o->zalloc(o, sizeof(convcode_state) * ce->num_states);
     if (!ce->next_state[1])
 	goto out_err;
 
