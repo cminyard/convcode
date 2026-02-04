@@ -64,8 +64,9 @@ void
 reinit_convcode(struct convcode *ce)
 {
     reinit_convencode(ce, CONVCODE_DEFAULT_START_STATE);
-    reinit_convdecode(ce, CONVCODE_DEFAULT_START_STATE,
-		      CONVCODE_DEFAULT_INIT_VAL);
+    if (ce->curr_path_values)
+	reinit_convdecode(ce, CONVCODE_DEFAULT_START_STATE,
+			  CONVCODE_DEFAULT_INIT_VAL);
 }
 
 static unsigned int
