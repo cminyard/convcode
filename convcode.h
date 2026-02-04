@@ -54,7 +54,7 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  *
  * max_decode_len_bits is the maximum number of bits that can be
  * decoded.  You can get a pretty big matrix from this.  If you say 0
- * here, you can only use the coder for encoding.
+ * here you can only use the coder for encoding.
  *
  * See the discussion below on tails for what do_tail does.
  *
@@ -405,8 +405,8 @@ struct convcode {
 
     /*
      * You don't need the whole path value matrix, you only need the
-     * previous one and the next one (the one you are working on).
-     * Each of these is num_states elements.
+     * previous (current) one and the next one (the one you are
+     * working on).  Each of these is num_states elements.
      */
     unsigned int *curr_path_values;
     unsigned int *next_path_values;

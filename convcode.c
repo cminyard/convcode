@@ -933,16 +933,20 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	 unsigned int *out_uncertainties)
 {
     struct test_data t;
-    struct convcode *ce = alloc_convcode(o, k, polys, npolys, 128,
-					 do_tail, false,
-					 handle_test_output, &t,
-					 handle_test_output, &t);
+    struct convcode *ce;
     unsigned int i, enc_nbits, dec_nbits, num_errs, rv = 0;
+    unsigned int len;
 
+    len = strlen(decoded);
+    o->bytes_allocated = 0;
+    ce = alloc_convcode(o, k, polys, npolys, len,
+			do_tail, false,
+			handle_test_output, &t,
+			handle_test_output, &t);
     printf("Test k=%u err=%u polys={ 0%o", k, expected_errs, polys[0]);
     for (i = 1; i < npolys; i++)
 	printf(", 0%o", polys[i]);
-    printf(" }\n");
+    printf(" } %u bits %lu bytes alloc\n", len, o->bytes_allocated);
     t.outpos = 0;
     if (expected_errs == 0) {
 	do_encode_data(ce, decoded, &enc_nbits);
@@ -1098,14 +1102,18 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	  bool do_tail, bool recursive)
 {
     struct test_data t;
-    struct convcode *ce = alloc_convcode(o, k, polys, npolys, 128,
-					 do_tail, recursive,
-					 handle_test_output, &t,
-					 handle_test_output, &t);
+    struct convcode *ce;
     unsigned int i, j, bit, total_bits, num_errs, rv = 0;
     char decoded[33];
     char encoded[1024];
+    unsigned int len;
 
+    len = 32;
+    o->bytes_allocated = 0;
+    ce = alloc_convcode(o, k, polys, npolys, len,
+			do_tail, recursive,
+			handle_test_output, &t,
+			handle_test_output, &t);
     if (recursive)
 	set_encode_output_per_symbol(ce, true);
 
@@ -1115,7 +1123,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	   polys[0]);
     for (i = 1; i < npolys; i++)
 	printf(", 0%o", polys[i]);
-    printf(" }\n");
+    printf(" } %u bits %lu bytes alloc\n", len, o->bytes_allocated);
 
     for (i = 8; i < 32; i++) {
 	for (j = 0; j < 10; j++) {

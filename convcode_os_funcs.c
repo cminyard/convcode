@@ -26,6 +26,7 @@ o_zalloc(convcode_os_funcs *o, unsigned long size)
 	*v = size;
 	v++;
 	mem_alloced += size;
+	o->bytes_allocated += size;
     }
     return v;
 }

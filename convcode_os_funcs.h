@@ -15,6 +15,7 @@
 
 typedef struct convcode_os_funcs convcode_os_funcs;
 struct convcode_os_funcs {
+    unsigned long bytes_allocated;
     void *(*zalloc)(convcode_os_funcs *f, unsigned long size);
     void (*free)(convcode_os_funcs *f, void *data);
 };
