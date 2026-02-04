@@ -1307,6 +1307,7 @@ main(int argc, char *argv[])
     convcode_state polys[CONVCODE_MAX_POLYNOMIALS];
     unsigned int num_polys = 0;
     unsigned int k;
+    unsigned int len;
     struct convcode *ce;
     unsigned int arg, total_bits, num_errs = 0;
     bool decode = false, test = false, do_tail = true, recursive = false;
@@ -1376,12 +1377,23 @@ main(int argc, char *argv[])
 	return 1;
     }
 
-    ce = alloc_convcode(o, k, polys, num_polys, 128, do_tail, recursive,
+    if (arg >= argc) {
+	fprintf(stderr, "No data given\n");
+	return 1;
+    }
+
+    if (decode) {
+	len = (strlen(argv[arg]) / num_polys) - (k - 1);
+    } else {
+	len = 0;
+    }
+    o->bytes_allocated = 0;
+    ce = alloc_convcode(o, k, polys, num_polys, len, do_tail, recursive,
 			handle_output, NULL,
 			handle_output, NULL);
     if (start_state)
 	reinit_convencode(ce, start_state);
-    if (start_state || init_val != CONVCODE_DEFAULT_INIT_VAL)
+    if (!decode && (start_state || init_val != CONVCODE_DEFAULT_INIT_VAL))
 	reinit_convdecode(ce, start_state, init_val);
 
     if (arg >= argc) {
@@ -1390,14 +1402,15 @@ main(int argc, char *argv[])
     }
 
     printf("  ");
-    if (decode)
+    if (decode) {
 	do_decode_data(ce, argv[arg], &total_bits, &num_errs, NULL);
-    else
-	do_encode_data(ce, argv[arg], &total_bits);
-
-    if (decode)
 	printf("\n  errors = %u", num_errs);
+    } else {
+	do_encode_data(ce, argv[arg], &total_bits);
+    }
+
     printf("\n  bits = %u\n", total_bits);
+    printf("  allocated %lu bytes\n", o->bytes_allocated);
     return 0;
 }
 #endif
