@@ -20,7 +20,7 @@
 static convcode_state *
 get_trellis_column(struct convcode *ce, unsigned int column)
 {
-    return ce->trellis + column * ce->num_states;
+    return ce->trellis + column * ce->num_trels;
 }
 
 static convcode_state
@@ -133,6 +133,7 @@ int
 setup_convcode1(struct convcode *ce, unsigned int k,
 		convcode_state *polynomials, unsigned int num_polynomials,
 		unsigned int max_decode_len_bits,
+		unsigned int num_trellises,
 		bool do_tail, bool recursive)
 {
     unsigned int i;
@@ -145,6 +146,10 @@ setup_convcode1(struct convcode *ce, unsigned int k,
     memset(ce, 0, sizeof(*ce));
     ce->k = k;
     ce->num_states = 1 << (k - 1);
+    if (num_trellises == 0)
+	ce->num_trels = ce->num_states;
+    else
+	ce->num_trels = num_trellises;
     ce->do_tail = do_tail;
     ce->recursive = recursive;
     ce->uncertainty_100 = 100;
@@ -244,6 +249,7 @@ alloc_convcode(convcode_os_funcs *o,
 	       unsigned int k, convcode_state *polynomials,
 	       unsigned int num_polynomials,
 	       unsigned int max_decode_len_bits,
+	       unsigned int num_trellises,
 	       bool do_tail, bool recursive,
 	       convcode_output enc_output, void *enc_out_user_data,
 	       convcode_output dec_output, void *dec_out_user_data)
@@ -254,7 +260,8 @@ alloc_convcode(convcode_os_funcs *o,
     if (!ce)
 	return NULL;
     if (setup_convcode1(ce, k, polynomials, num_polynomials,
-			max_decode_len_bits, do_tail, recursive)) {
+			max_decode_len_bits, num_trellises, do_tail,
+			recursive)) {
 	o->free(o, ce);
 	return NULL;
     }
@@ -284,7 +291,7 @@ alloc_convcode(convcode_os_funcs *o,
     if (max_decode_len_bits > 0) {
 	/* Add on a bit for the stuff at the end. */
 	ce->trellis = o->zalloc(o, sizeof(*ce->trellis) *
-				ce->trellis_size * ce->num_states);
+				ce->trellis_size * ce->num_trels);
 	if (!ce->trellis)
 	    goto out_err;
 
@@ -562,7 +569,7 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 
     for (i = 0; i < ce->num_states; i++) {
 	convcode_state pstate1, pstate2;
-	int bit;
+	int bit1, bit2;
 	unsigned int dist1, dist2;
 
 	/*
@@ -574,19 +581,21 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 	pstate2 = pstate1 | (1 << (ce->k - 2));
 
 	dist1 = currp[pstate1];
-	bit = get_prev_bit(ce, pstate1, i);
-	dist1 += hamming_distance(ce, ce->convert[bit][pstate1],
+	bit1 = get_prev_bit(ce, pstate1, i);
+	dist1 += hamming_distance(ce, ce->convert[bit1][pstate1],
 				  bits, uncertainty);
 	dist2 = currp[pstate2];
-	bit = get_prev_bit(ce, pstate2, i);
-	dist2 += hamming_distance(ce, ce->convert[bit][pstate2],
+	bit2 = get_prev_bit(ce, pstate2, i);
+	dist2 += hamming_distance(ce, ce->convert[bit2][pstate2],
 				  bits, uncertainty);
 
 	if (dist2 < dist1) {
-	    set_trellis_entry(ce, ce->ctrellis, i, pstate2);
+	    set_trellis_entry(ce, ce->ctrellis, i,
+			      pstate2 | (bit2 << CONVCODE_MAX_K));
 	    nextp[i] = dist2;
 	} else {
-	    set_trellis_entry(ce, ce->ctrellis, i, pstate1);
+	    set_trellis_entry(ce, ce->ctrellis, i,
+			      pstate1 | (bit1 << CONVCODE_MAX_K));
 	    nextp[i] = dist1;
 	}
     }
@@ -716,14 +725,17 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
     /* Go backwards through the trellis to find the full path. */
     for (i = ce->ctrellis; i > 0; ) {
 	convcode_state pstate; /* Previous state */
+	int bit;
 
 	i--;
 	pstate = get_trellis_entry(ce, i, cstate);
+	bit = CONVCODE_PSTATE_BIT(pstate);
+	pstate = CONVCODE_PSTATE_VAL(pstate);
 	/*
 	 * Store the bit values in position 0 so we can play it back
 	 * forward easily.
 	 */
-	set_trellis_entry(ce, i, 0, get_prev_bit(ce, pstate, cstate));
+	set_trellis_entry(ce, i, 0, bit);
 	cstate = pstate;
     }
 
@@ -778,7 +790,8 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 
 	i--;
 	pstate = get_trellis_entry(ce, i, cstate);
-	bit = get_prev_bit(ce, pstate, cstate);
+	bit = CONVCODE_PSTATE_BIT(pstate);
+	pstate = CONVCODE_PSTATE_VAL(pstate);
 
 	/*
 	 * Store the bit values in the user-supplied data.
@@ -958,7 +971,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 
     len = strlen(decoded);
     o->bytes_allocated = 0;
-    ce = alloc_convcode(o, k, polys, npolys, len,
+    ce = alloc_convcode(o, k, polys, npolys, len, 0,
 			do_tail, false,
 			handle_test_output, &t,
 			handle_test_output, &t);
@@ -1129,7 +1142,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 
     len = 32;
     o->bytes_allocated = 0;
-    ce = alloc_convcode(o, k, polys, npolys, len,
+    ce = alloc_convcode(o, k, polys, npolys, len, 0,
 			do_tail, recursive,
 			handle_test_output, &t,
 			handle_test_output, &t);
@@ -1410,7 +1423,7 @@ main(int argc, char *argv[])
 	len = 0;
     }
     o->bytes_allocated = 0;
-    ce = alloc_convcode(o, k, polys, num_polys, len, do_tail, recursive,
+    ce = alloc_convcode(o, k, polys, num_polys, len, 0, do_tail, recursive,
 			handle_output, NULL,
 			handle_output, NULL);
     if (start_state)

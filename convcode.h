@@ -31,10 +31,12 @@ struct convcode;
  * This is the size of the polynomials and thus the maximum state
  * machine size, and the value to hold the state.  Keep it as small as
  * possible to reduce the trellis size.  Size of K is limited by this
- * value.
+ * value.  We use the top bit of this to store the bit value.
  */
 typedef uint16_t convcode_state;
-#define CONVCODE_MAX_K 16
+#define CONVCODE_MAX_K 15
+#define CONVCODE_PSTATE_VAL(v) ((v) & ~(1 << CONVCODE_MAX_K))
+#define CONVCODE_PSTATE_BIT(v) ((v) >> CONVCODE_MAX_K)
 
 /*
  * Used to report output bits as they are generated.
@@ -79,6 +81,7 @@ struct convcode *alloc_convcode(convcode_os_funcs *o,
 				unsigned int k, convcode_state *polynomials,
 				unsigned int num_polynomials,
 				unsigned int max_decode_len_bits,
+				unsigned int num_trellises,
 				bool do_tail, bool recursive,
 				convcode_output enc_output,
 				void *enc_out_user_data,
@@ -403,6 +406,7 @@ struct convcode {
     convcode_state *trellis;
     unsigned int trellis_size;
     unsigned int ctrellis; /* Current trellis value */
+    unsigned int num_trels; /* Number of trellises we keep */
 
     /*
      * You don't need the whole path value matrix, you only need the
@@ -440,7 +444,7 @@ struct convcode {
  *  * Allocate the following:
  *    ce->convert - sizeof(*ce->convert) * ce->convert_size
  *  * If you are doing decoding, allocate the following:
- *    ce->trellis - sizeof(*ce->trellis) * ce->trellis_size * ce->num_states
+ *    ce->trellis - sizeof(*ce->trellis) * ce->trellis_size * ce->num_trels
  *    ce->curr_paths_value - sizeof(*ce->curr_path_values) * ce->num_states
  *    ce->next_paths_value - sizeof(*ce->next_path_values) * ce->num_states
  *  * Call setup_convcode2(ce)
@@ -460,6 +464,7 @@ struct convcode {
 int setup_convcode1(struct convcode *ce, unsigned int k,
 		    convcode_state *polynomials, unsigned int num_polynomials,
 		    unsigned int max_decode_len_bits,
+		    unsigned int num_trellises,
 		    bool do_tail, bool recursive);
 
 /* See the above discussion for how to use this. */
