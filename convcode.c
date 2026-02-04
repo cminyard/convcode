@@ -532,9 +532,10 @@ get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
 
     if (ce->next_state[0][pstate] == cstate)
 	return 0;
+#if 1
     else
 	return 1;
-#if 0
+#else
     /* For debugging */
     else if (ce->next_state[1][pstate] == cstate)
 	return 1;
@@ -664,8 +665,7 @@ convdecode_data(struct convcode *ce,
 	ce->leftover_bits_data |= newbits << ce->leftover_bits;
 	if (uncertainty) {
 	    for (i = 0; i < extract_size; i++)
-		ce->leftover_uncertainty[ce->leftover_bits++] =
-		    uncertainty[i];
+		ce->leftover_uncertainty[ce->leftover_bits++] = uncertainty[i];
 	    rv = decode_bits(ce, ce->leftover_bits_data,
 			     ce->leftover_uncertainty);
 	} else {
@@ -1289,15 +1289,19 @@ run_tests(bool do_tail)
 	}
 	errs += rand_test(7, polys, 3, do_tail, false);
     }
+#if CONVCODE_MAX_K >= 9
     { /* CDMA 2000 */
 	convcode_state polys[4] = { 0671, 0645, 0473, 0537 };
 	errs += rand_test(9, polys, 4, do_tail, false);
     }
+#endif
+#if CONVCODE_MAX_K >= 15
     { /* Cassini / Mars Pathfinder */
 	convcode_state polys[7] = { 074000, 046321, 051271, 070535,
 	    063667, 073277, 076513 };
 	errs += rand_test(15, polys, 7, do_tail, false);
     }
+#endif
     /*
      * Recursive tests, taken from:
      * https://en.wikipedia.org/wiki/Convolutional_code#Recursive_and_non-recursive_codes.
