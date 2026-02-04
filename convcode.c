@@ -23,7 +23,18 @@ get_trellis_column(struct convcode *ce, unsigned int column)
     return ce->trellis + column * ce->num_states;
 }
 
-#define trellis_entry(ce, column, row) get_trellis_column(ce, column)[row]
+static convcode_state
+get_trellis_entry(struct convcode *ce, unsigned int column, unsigned int row)
+{
+    return get_trellis_column(ce, column)[row];
+}
+
+static void
+set_trellis_entry(struct convcode *ce, unsigned int column, unsigned int row,
+		  convcode_state val)
+{
+    get_trellis_column(ce, column)[row] = val;
+}
 
 void
 reinit_convencode(struct convcode *ce, unsigned int start_state)
@@ -533,6 +544,11 @@ get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
 #endif
 }
 
+/*
+ * We come here with a symbol (the number of bits is the number of
+ * polynomials) The uncertainty is an array of 8-bit values, one for
+ * each bit, low bit first.
+ */
 static int
 decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 {
@@ -544,14 +560,16 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 	return 1;
 
     for (i = 0; i < ce->num_states; i++) {
-	convcode_state pstate1 = i >> 1, pstate2, bit;
+	convcode_state pstate1, pstate2;
+	int bit;
 	unsigned int dist1, dist2;
 
 	/*
-	 * This state could have come from two different states, one
-	 * with the top bit set (pstate2) and with with the top bit
-	 * clear (pstate1).  We check both of those.
+	 * This state could have come from two different previous
+	 * states, one with the top bit set (pstate2) and with with
+	 * the top bit clear (pstate1).  We check both of those.
 	 */
+	pstate1 = i >> 1;
 	pstate2 = pstate1 | (1 << (ce->k - 2));
 
 	dist1 = currp[pstate1];
@@ -564,17 +582,17 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 				  bits, uncertainty);
 
 	if (dist2 < dist1) {
-	    trellis_entry(ce, ce->ctrellis, i) = pstate2;
+	    set_trellis_entry(ce, ce->ctrellis, i, pstate2);
 	    nextp[i] = dist2;
 	} else {
-	    trellis_entry(ce, ce->ctrellis, i) = pstate1;
+	    set_trellis_entry(ce, ce->ctrellis, i, pstate1);
 	    nextp[i] = dist1;
 	}
     }
 #if CONVCODE_DEBUG_STATES
     printf("T(%u) %x\n", ce->ctrellis, bits);
     for (i = 0; i < ce->num_states; i++) {
-	printf(" %4.4u", trellis_entry(ce, ce->ctrellis, i));
+	printf(" %4.4u", get_trellis_entry(ce, ce->ctrellis, i));
     }
     printf("\n");
     for (i = 0; i < ce->num_states; i++) {
@@ -700,12 +718,12 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 	convcode_state pstate; /* Previous state */
 
 	i--;
-	pstate = trellis_entry(ce, i, cstate);
+	pstate = get_trellis_entry(ce, i, cstate);
 	/*
 	 * Store the bit values in position 0 so we can play it back
 	 * forward easily.
 	 */
-	trellis_entry(ce, i, 0) = get_prev_bit(ce, pstate, cstate);
+	set_trellis_entry(ce, i, 0, get_prev_bit(ce, pstate, cstate));
 	cstate = pstate;
     }
 
@@ -713,7 +731,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
     if (ce->do_tail)
 	extra_bits = ce->k - 1;
     for (i = 0; i < ce->ctrellis - extra_bits; i++) {
-	int rv = output_bits(ce, &ce->dec_out, trellis_entry(ce, i, 0), 1);
+	int rv = output_bits(ce, &ce->dec_out, get_trellis_entry(ce, i, 0), 1);
 	if (rv)
 	    return rv;
     }
@@ -759,7 +777,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 	const uint8_t *u = NULL;
 
 	i--;
-	pstate = trellis_entry(ce, i, cstate);
+	pstate = get_trellis_entry(ce, i, cstate);
 	bit = get_prev_bit(ce, pstate, cstate);
 
 	/*
