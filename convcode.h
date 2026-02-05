@@ -48,7 +48,7 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  * Allocate a convolutional coder for coding or decoding.
  *
  * k is the constraint (the size of the polynomials in bits).  The
- * maximum value is 16,
+ * maximum value is CONVCODE_MAX_K,
  *
  * The polynomials are given in the array.  They are coded where the
  * high bit handles the first bit fed into the state machine.  This
@@ -58,6 +58,13 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  * max_decode_len_bits is the maximum number of bits that can be
  * decoded.  You can get a pretty big matrix from this.  If you say 0
  * here you can only use the coder for encoding.
+ *
+ * trellis_width sets the size of the trellis.  If this is zero, then
+ * the width will be set to the number of states (1 << (k - 1)) and
+ * all trellis paths will be kept.  If this is set to less than the
+ * number of states, then the "trellis_width" most likely paths will
+ * be kept and the rest of the paths discarded.  This can result in
+ * poor performance, but can save a lot of data.
  *
  * See the discussion below on tails for what do_tail does.
  *
@@ -301,9 +308,14 @@ int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  *   bit_uncertainty = ((uncertainty * num_polynomials) / bit_position)
  *
  * which should give you a value from 0 - 100.  You can, of course,
- * take that anddo (100 - bit_uncertainty) to get the certainty, or
+ * take that and do (100 - bit_uncertainty) to get the certainty, or
  * probability.  This is assuming the max_uncertainty is 100, of
  * course, you would need to adjust if you changed that.
+ *
+ * NOTE: If you have trellis_width set to < num_states, then
+ * output_uncertainty will not be correct.  The previous state data is
+ * lost because paths are discarding, and keeping that data around
+ * would use a lot of memory.
  */
 int convdecode_block(struct convcode *ce, const unsigned char *bytes,
 		     unsigned int nbits, const uint8_t *uncertainty,
@@ -411,8 +423,9 @@ struct convcode {
     /*
      * A temporary trellis entry, only set/used if trelw < num_states.
      * We calculate the full set of state values into this and then
-     * compress it into the trellis.  Also a map that is used to map
-     * from the entry to the pstate, since we sort this.
+     * compress it into the trellis.  Also a map that is used for
+     * sorting, after the sort tmptrelmap will index into tmptrel
+     * sorted.
      */
     convcode_state *tmptrel;
     convcode_state *tmptrelmap;

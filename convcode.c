@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
 
@@ -65,10 +66,14 @@ reinit_convdecode(struct convcode *ce, unsigned int start_state,
 
     if (ce->num_states > 0) {
 	ce->curr_path_values[start_state] = 0;
+	if (ce->trelmap)
+	    ce->trelmap[start_state] = start_state;
 	for (i = 0; i < ce->num_states; i++) {
 	    if (i == start_state)
 		continue;
 	    ce->curr_path_values[i] = init_other_states;
+	    if (ce->trelmap)
+		ce->trelmap[i] = i | (1 << CONVCODE_MAX_K);
 	}
 	ce->ctrellis = 0;
     }
@@ -563,48 +568,57 @@ get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
 
     if (ce->next_state[0][pstate] == cstate)
 	return 0;
-#if 1
+#if !CONVCODE_DEBUG_STATES
     else
 	return 1;
 #else
     /* For debugging */
     else if (ce->next_state[1][pstate] == cstate)
 	return 1;
-    else
-	printf("ERR!: %x %x %x %x\n", pstate, cstate);
+    else {
+	printf("ERR!: %x %x\n", pstate, cstate);
+	assert(0);
+    }
     return 0;
 #endif
 }
 
 static int
-cmp_states(struct convcode *ce,
-	   convcode_state state1, convcode_state state2,
-	   convcode_state pstate1, convcode_state pstate2)
+cmp_states(const void *val1, const void *val2, void *ud)
 {
-    bool invalid1 = ce->trelmap[pstate1] >> CONVCODE_MAX_K;
-    bool invalid2 = ce->trelmap[pstate2] >> CONVCODE_MAX_K;
-    unsigned int dist1 = ce->next_path_values[ce->tmptrelmap[state1]];
-    unsigned int dist2 = ce->next_path_values[ce->tmptrelmap[state2]];
+    struct convcode *ce = ud;
+    convcode_state state1 = *((convcode_state *) val1);
+    convcode_state state2 = *((convcode_state *) val2);
+    convcode_state pstate1 = ce->tmptrel[state1];
+    convcode_state pstate2 = ce->tmptrel[state2];
+    bool invalid1, invalid2;
+    unsigned int dist1, dist2;
+    int rv = 0;
+
+    pstate1 = CONVCODE_PSTATE_VAL(pstate1);
+    pstate2 = CONVCODE_PSTATE_VAL(pstate2);
+    invalid1 = ce->trelmap[pstate1] >> CONVCODE_MAX_K;
+    invalid2 = ce->trelmap[pstate2] >> CONVCODE_MAX_K;
+    dist1 = ce->next_path_values[state1];
+    dist2 = ce->next_path_values[state2];
 
     /* Entries going back to invalid pstates are always bigger. */
-    if (invalid1 && !invalid2)
-	return 1;
-    if (!invalid1 && invalid2)
-	return -1;
-    if (invalid1 && invalid2)
-	return 0; /* Doesn't really matter, neither will be used. */
-
-    if (dist1 < dist2)
-	return -1;
-    if (dist2 > dist1)
-	return 1;
-    return 0;
+    if (invalid1 && !invalid2) {
+	rv = 1;
+    } else if (!invalid1 && invalid2) {
+	rv = -1;
+    } else if (dist1 < dist2) {
+	rv = -1;
+    } else if (dist1 > dist2) {
+	rv = 1;
+    }
+    return rv;
 }
 
 static void
 sort_tmptrel(struct convcode *ce)
 {
-#if 1
+#if 0
     unsigned int i, j;
 
     for (i = 0; i < ce->num_states - 1; i++) {
@@ -612,10 +626,7 @@ sort_tmptrel(struct convcode *ce)
 
 	/* Find the smallest value */
 	for (j = i + 1; j < ce->num_states; j++) {
-	    convcode_state pstate1 = CONVCODE_PSTATE_VAL(ce->tmptrel[smallest]);
-	    convcode_state pstate2 = CONVCODE_PSTATE_VAL(ce->tmptrel[j]);
-
-	    if (cmp_states(ce, j, smallest, pstate2, pstate1) < 0)
+	    if (cmp_states(&j, &smallest, ce) < 0)
 		smallest = j;
 	}
 
@@ -623,15 +634,27 @@ sort_tmptrel(struct convcode *ce)
 	    unsigned int tmp;
 
 	    /* Put the smallest value into i */
-	    tmp = ce->tmptrel[smallest];
-	    ce->tmptrel[smallest] = ce->tmptrel[i];
-	    ce->tmptrel[i] = tmp;
 	    tmp = ce->tmptrelmap[smallest];
 	    ce->tmptrelmap[smallest] = ce->tmptrelmap[i];
 	    ce->tmptrelmap[i] = tmp;
 	}
     }
 #else
+    qsort_r(ce->tmptrelmap, ce->num_states, sizeof(*ce->tmptrelmap),
+	    cmp_states, ce);
+#endif
+
+#if 0
+    printf("\nX\n");
+    for (unsigned int i = 0; i < ce->num_states; i++) {
+	convcode_state pstate = ce->tmptrel[ce->tmptrelmap[i]];
+	unsigned int dist = ce->next_path_values[ce->tmptrelmap[i]];
+	bool invalid;
+
+	invalid = ce->trelmap[pstate] >> CONVCODE_MAX_K;
+	pstate = CONVCODE_PSTATE_VAL(pstate);
+	printf("  %u %u %u %d:%u\n", i, ce->tmptrelmap[i], pstate, invalid, dist);
+    }
 #endif
 }
 
@@ -709,12 +732,15 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 	if (ce->ctrellis == 0) {
 	    /* Previous state doesn't matter here, we only need the bit. */
 	    for (i = 0; i < ce->trelw; i++) {
-		ntrel[i] = CONVCODE_PSTATE_BIT(trel[i]) << CONVCODE_MAX_K;
+		convcode_state v = ce->tmptrelmap[i];
+
+		ntrel[i] = CONVCODE_PSTATE_BIT(trel[v]) << CONVCODE_MAX_K;
 	    }
 	} else {
 	    for (i = 0; i < ce->trelw; i++) {
-		convcode_state pstate = CONVCODE_PSTATE_VAL(trel[i]);
-		int bit = CONVCODE_PSTATE_BIT(trel[i]);
+		convcode_state v = ce->tmptrelmap[i];
+		convcode_state pstate = CONVCODE_PSTATE_VAL(trel[v]);
+		int bit = CONVCODE_PSTATE_BIT(trel[v]);
 
 		ntrel[i] = ce->trelmap[pstate] | (bit << CONVCODE_MAX_K);
 	    }
@@ -995,7 +1021,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *
  * To supply your own input and output, run as:
  *
- * ./convcode [-t] [-x] [-s start state] [-i init_val]
+ * ./convcode [-t] [-x] [-w <trellis width>] [-s <start state>] [-i <init_val>]
  *        -p <poly1> [ -p <poly2> ... ] k <bits>
  *
  * where bits is a sequence of 0 or 1.  The -x option disables the
@@ -1003,6 +1029,8 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  * (see the convcode.h file about do_tail).  -x works with -t to run
  * the tests that way.  Otherwise, no other options have an effect
  * with -t.
+ *
+ * The -w option sets the trellis width.
  *
  * The -s and -i options set the start state of the encoder/decoder,
  * and for decoding the init value for the probability matrix for
@@ -1136,7 +1164,8 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 			do_tail, false,
 			handle_test_output, &t,
 			handle_test_output, &t);
-    printf("Test k=%u err=%u polys={ 0%o", k, expected_errs, polys[0]);
+    printf("Test k=%u %s err=%u polys={ 0%o", k, do_tail ? "tail" : "notail",
+	   expected_errs, polys[0]);
     for (i = 1; i < npolys; i++)
 	printf(", 0%o", polys[i]);
     printf(" } %u bits %lu bytes alloc\n", len, o->bytes_allocated);
@@ -1228,7 +1257,8 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	    goto out;
 	}
 	if (out_uncertainties && (t.uncertainties[i] != out_uncertainties[i])) {
-	    printf("  block decode invalid uncertainty at bit %u\n", i);
+	    printf("  block decode invalid uncertainty at bit %u: %u %u\n", i,
+		   t.uncertainties[i], out_uncertainties[i]);
 	    rv++;
 	    goto out;
 	}
@@ -1427,14 +1457,17 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	static unsigned int out_uncertainties[8] = {
 	    0, 0, 100, 100, 100, 100, 100, 100
 	};
-	if (do_tail) {
-	    errs += run_test(7, polys, 2, do_tail, trellis_width,
-			     "0011100010011010100111011100", "01011010",
-			     100, uncertainties, out_uncertainties);
-	} else {
-	    errs += run_test(7, polys, 2, do_tail, trellis_width,
-			     "0011100010011010", "01011010",
-			     100, uncertainties, out_uncertainties);
+	if (trellis_width == 0) {
+	    /* Output uncertainties only work with full trellis width. */
+	    if (do_tail) {
+		errs += run_test(7, polys, 2, do_tail, trellis_width,
+				 "0011100010011010100111011100", "01011010",
+				 100, uncertainties, out_uncertainties);
+	    } else {
+		errs += run_test(7, polys, 2, do_tail, trellis_width,
+				 "0011100010011010", "01011010",
+				 100, uncertainties, out_uncertainties);
+	    }
 	}
 	errs += rand_test(7, polys, 2, do_tail, trellis_width, false);
     }
@@ -1450,16 +1483,20 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	    errs += run_test(7, polys, 3, do_tail, trellis_width,
 			     "111001101011100110011101111111100110001111",
 			     "10110111", 0, NULL, NULL);
-	    errs += run_test(7, polys, 3, do_tail, trellis_width,
-			     "001001101011100110011100111111100110001011",
-			     "10110111", 4, NULL, out_uncertainties1);
+	    if (trellis_width == 0)
+		/* Output uncertainties only work with full trellis width. */
+		errs += run_test(7, polys, 3, do_tail, trellis_width,
+				 "001001101011100110011100111111100110001011",
+				 "10110111", 4, NULL, out_uncertainties1);
 	} else {
 	    errs += run_test(7, polys, 3, do_tail, trellis_width,
 			     "111001101011100110011101",
 			     "10110111", 0, NULL, NULL);
-	    errs += run_test(7, polys, 3, do_tail, trellis_width,
-			     "001001101010100010011101",
-			     "10110111", 4, NULL, out_uncertainties2);
+	    if (trellis_width == 0)
+		/* Output uncertainties only work with full trellis width. */
+		errs += run_test(7, polys, 3, do_tail, trellis_width,
+				 "001001101010100010011101",
+				 "10110111", 4, NULL, out_uncertainties2);
 	}
 	errs += rand_test(7, polys, 3, do_tail, trellis_width, false);
     }
