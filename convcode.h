@@ -20,10 +20,11 @@
 
 /*
  * Maximum number of polynomials. I've never seen one with more than
- * 8, but it doesn't take a lot of space to add a few more.
+ * 8.  If larger is required, it doesn't take a lot of space to add a
+ * few more.
  */
-typedef uint16_t convcode_symsize;
-#define CONVCODE_MAX_POLYNOMIALS 16
+typedef uint8_t convcode_symsize;
+#define CONVCODE_MAX_POLYNOMIALS 8
 
 struct convcode;
 
@@ -477,8 +478,9 @@ struct convcode {
  *    ce->curr_paths_value - sizeof(*ce->curr_path_values) * ce->num_states
  *    ce->next_paths_value - sizeof(*ce->next_path_values) * ce->num_states
  *    if trelw < num_states
- *      ce->tmptrel - sizeof(*ce->trellis) * ce->trelw
- *      ce->trelmap - sizeof(*ce->trellis) * ce->trelw
+ *      ce->tmptrel - sizeof(*ce->tmptrel) * ce->trelw
+ *      ce->tmptrelmap - sizeof(*ce->tmptrelmap) * ce->trelw
+ *      ce->trelmap - sizeof(*ce->trelmap) * ce->trelw
  *  * Call setup_convcode2(ce)
  *  * Call reinit_convcode(ce)
  *
