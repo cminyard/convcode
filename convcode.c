@@ -65,13 +65,13 @@ reinit_convdecode(struct convcode *ce, unsigned int start_state,
     ce->dec_out.total_out_bits = 0;
 
     if (ce->num_states > 0) {
-	ce->curr_path_values[start_state] = 0;
+	ce->prev_path_values[start_state] = 0;
 	if (ce->trelmap)
 	    ce->trelmap[start_state] = start_state;
 	for (i = 0; i < ce->num_states; i++) {
 	    if (i == start_state)
 		continue;
-	    ce->curr_path_values[i] = init_other_states;
+	    ce->prev_path_values[i] = init_other_states;
 	    if (ce->trelmap)
 		ce->trelmap[i] = i | (1 << CONVCODE_MAX_K);
 	}
@@ -85,7 +85,7 @@ void
 reinit_convcode(struct convcode *ce)
 {
     reinit_convencode(ce, CONVCODE_DEFAULT_START_STATE);
-    if (ce->curr_path_values)
+    if (ce->prev_path_values)
 	reinit_convdecode(ce, CONVCODE_DEFAULT_START_STATE,
 			  CONVCODE_DEFAULT_INIT_VAL);
 }
@@ -138,10 +138,10 @@ free_convcode(struct convcode *ce)
 	o->free(o, ce->tmptrelmap);
     if (ce->trelmap)
 	o->free(o, ce->trelmap);
+    if (ce->prev_path_values)
+	o->free(o, ce->prev_path_values);
     if (ce->curr_path_values)
 	o->free(o, ce->curr_path_values);
-    if (ce->next_path_values)
-	o->free(o, ce->next_path_values);
     o->free(o, ce);
 }
 
@@ -324,13 +324,13 @@ alloc_convcode(convcode_os_funcs *o,
 		goto out_err;
 	}
 
+	ce->prev_path_values = o->zalloc(o, sizeof(*ce->prev_path_values)
+					 * ce->num_states);
+	if (!ce->prev_path_values)
+	    goto out_err;
 	ce->curr_path_values = o->zalloc(o, sizeof(*ce->curr_path_values)
 					 * ce->num_states);
 	if (!ce->curr_path_values)
-	    goto out_err;
-	ce->next_path_values = o->zalloc(o, sizeof(*ce->next_path_values)
-					 * ce->num_states);
-	if (!ce->next_path_values)
 	    goto out_err;
     }
 
@@ -599,8 +599,8 @@ cmp_states(const void *val1, const void *val2, void *ud)
     pstate2 = CONVCODE_PSTATE_VAL(pstate2);
     invalid1 = ce->trelmap[pstate1] >> CONVCODE_MAX_K;
     invalid2 = ce->trelmap[pstate2] >> CONVCODE_MAX_K;
-    dist1 = ce->next_path_values[state1];
-    dist2 = ce->next_path_values[state2];
+    dist1 = ce->curr_path_values[state1];
+    dist2 = ce->curr_path_values[state2];
 
     /* Entries going back to invalid pstates are always bigger. */
     if (invalid1 && !invalid2) {
@@ -666,7 +666,7 @@ sort_tmptrel(struct convcode *ce)
     printf("\nX\n");
     for (unsigned int i = 0; i < ce->num_states; i++) {
 	convcode_state pstate = ce->tmptrel[ce->tmptrelmap[i]];
-	unsigned int dist = ce->next_path_values[ce->tmptrelmap[i]];
+	unsigned int dist = ce->curr_path_values[ce->tmptrelmap[i]];
 	bool invalid;
 
 	invalid = ce->trelmap[pstate] >> CONVCODE_MAX_K;
@@ -684,8 +684,8 @@ sort_tmptrel(struct convcode *ce)
 static int
 decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 {
+    unsigned int *prevp = ce->prev_path_values;
     unsigned int *currp = ce->curr_path_values;
-    unsigned int *nextp = ce->next_path_values;
     unsigned int i;
     convcode_state *trel;
 
@@ -710,21 +710,21 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 	pstate1 = i >> 1;
 	pstate2 = pstate1 | (1 << (ce->k - 2));
 
-	dist1 = currp[pstate1];
+	dist1 = prevp[pstate1];
 	bit1 = get_prev_bit(ce, pstate1, i);
 	dist1 += hamming_distance(ce, ce->convert[bit1][pstate1],
 				  bits, uncertainty);
-	dist2 = currp[pstate2];
+	dist2 = prevp[pstate2];
 	bit2 = get_prev_bit(ce, pstate2, i);
 	dist2 += hamming_distance(ce, ce->convert[bit2][pstate2],
 				  bits, uncertainty);
 
 	if (dist2 < dist1) {
 	    trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
-	    nextp[i] = dist2;
+	    currp[i] = dist2;
 	} else {
 	    trel[i] = pstate1 | (bit1 << CONVCODE_MAX_K);
-	    nextp[i] = dist1;
+	    currp[i] = dist1;
 	}
     }
 
@@ -791,14 +791,14 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 	printf("\n");
     }
     for (i = 0; i < ce->num_states; i++)
-	printf(" %u:%4.4u", i, nextp[i]);
+	printf(" %u:%4.4u", i, currp[i]);
     printf("\n");
 #endif
     ce->ctrellis++;
 
     /* Swap the values so we don't have to copy next to curr. */
-    ce->next_path_values = currp;
-    ce->curr_path_values = nextp;
+    ce->curr_path_values = prevp;
+    ce->prev_path_values = currp;
     return 0;
 }
 
@@ -898,7 +898,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 		  unsigned int *num_errs)
 {
     unsigned int i, extra_bits = 0;
-    unsigned int min_val = ce->curr_path_values[0], cstate = 0;
+    unsigned int min_val = ce->prev_path_values[0], cstate = 0;
 
     /* Find the minimum value in the final path. */
     if (ce->trelmap) {
@@ -906,9 +906,9 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 	cstate = 0;
     } else {
 	for (i = 1; i < ce->num_states; i++) {
-	    if (ce->curr_path_values[i] < min_val) {
+	    if (ce->prev_path_values[i] < min_val) {
 		cstate = i;
-		min_val = ce->curr_path_values[i];
+		min_val = ce->prev_path_values[i];
 	    }
 	}
     }
@@ -968,14 +968,14 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
     if (ce->trelmap) {
 	/* Minimum value is always at 0 because it's sorted. */
 	cstate = 0;
-	min_val = ce->curr_path_values[0];
+	min_val = ce->prev_path_values[0];
     } else {
-	min_val = ce->curr_path_values[0];
+	min_val = ce->prev_path_values[0];
 	cstate = 0;
 	for (i = 1; i < ce->num_states; i++) {
-	    if (ce->curr_path_values[i] < min_val) {
+	    if (ce->prev_path_values[i] < min_val) {
 		cstate = i;
-		min_val = ce->curr_path_values[i];
+		min_val = ce->prev_path_values[i];
 	    }
 	}
     }

@@ -443,8 +443,8 @@ struct convcode {
      * previous (current) one and the next one (the one you are
      * working on).  Each of these is num_states elements.
      */
+    unsigned int *prev_path_values;
     unsigned int *curr_path_values;
-    unsigned int *next_path_values;
 
     /*
      * The uncertainty that maps to 100% uncertain for soft decoding.
@@ -475,8 +475,8 @@ struct convcode {
  *    ce->convert - sizeof(*ce->convert) * ce->convert_size
  *  * If you are doing decoding, allocate the following:
  *    ce->trellis - sizeof(*ce->trellis) * ce->trellis_size * ce->trelw
+ *    ce->prev_paths_value - sizeof(*ce->prev_path_values) * ce->num_states
  *    ce->curr_paths_value - sizeof(*ce->curr_path_values) * ce->num_states
- *    ce->next_paths_value - sizeof(*ce->next_path_values) * ce->num_states
  *    if trelw < num_states
  *      ce->tmptrel - sizeof(*ce->tmptrel) * ce->trelw
  *      ce->tmptrelmap - sizeof(*ce->tmptrelmap) * ce->trelw
