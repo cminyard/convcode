@@ -12,6 +12,11 @@
 
 #define CONVCODE_DEBUG_STATES 0
 
+#if CONVCODE_DEBUG_STATES
+#include <stdio.h>
+#include <assert.h>
+#endif
+
 /*
  * The trellis is a two-dimensional matrix, but the size is dynamic
  * based upon how it is created.  So we use a one-dimensional matrix
@@ -20,7 +25,7 @@
 static convcode_state *
 get_trellis_column(struct convcode *ce, unsigned int column)
 {
-    return ce->trellis + column * ce->num_trels;
+    return ce->trellis + column * ce->trelw;
 }
 
 static convcode_state
@@ -122,6 +127,12 @@ free_convcode(struct convcode *ce)
 	o->free(o, ce->next_state[1]);
     if (ce->trellis)
 	o->free(o, ce->trellis);
+    if (ce->tmptrel)
+	o->free(o, ce->tmptrel);
+    if (ce->tmptrelmap)
+	o->free(o, ce->tmptrelmap);
+    if (ce->trelmap)
+	o->free(o, ce->trelmap);
     if (ce->curr_path_values)
 	o->free(o, ce->curr_path_values);
     if (ce->next_path_values)
@@ -133,7 +144,7 @@ int
 setup_convcode1(struct convcode *ce, unsigned int k,
 		convcode_state *polynomials, unsigned int num_polynomials,
 		unsigned int max_decode_len_bits,
-		unsigned int num_trellises,
+		unsigned int trellis_width,
 		bool do_tail, bool recursive)
 {
     unsigned int i;
@@ -146,10 +157,10 @@ setup_convcode1(struct convcode *ce, unsigned int k,
     memset(ce, 0, sizeof(*ce));
     ce->k = k;
     ce->num_states = 1 << (k - 1);
-    if (num_trellises == 0)
-	ce->num_trels = ce->num_states;
+    if (trellis_width == 0 || trellis_width > ce->num_states)
+	ce->trelw = ce->num_states;
     else
-	ce->num_trels = num_trellises;
+	ce->trelw = trellis_width;
     ce->do_tail = do_tail;
     ce->recursive = recursive;
     ce->uncertainty_100 = 100;
@@ -249,7 +260,7 @@ alloc_convcode(convcode_os_funcs *o,
 	       unsigned int k, convcode_state *polynomials,
 	       unsigned int num_polynomials,
 	       unsigned int max_decode_len_bits,
-	       unsigned int num_trellises,
+	       unsigned int trellis_width,
 	       bool do_tail, bool recursive,
 	       convcode_output enc_output, void *enc_out_user_data,
 	       convcode_output dec_output, void *dec_out_user_data)
@@ -260,7 +271,7 @@ alloc_convcode(convcode_os_funcs *o,
     if (!ce)
 	return NULL;
     if (setup_convcode1(ce, k, polynomials, num_polynomials,
-			max_decode_len_bits, num_trellises, do_tail,
+			max_decode_len_bits, trellis_width, do_tail,
 			recursive)) {
 	o->free(o, ce);
 	return NULL;
@@ -291,9 +302,22 @@ alloc_convcode(convcode_os_funcs *o,
     if (max_decode_len_bits > 0) {
 	/* Add on a bit for the stuff at the end. */
 	ce->trellis = o->zalloc(o, sizeof(*ce->trellis) *
-				ce->trellis_size * ce->num_trels);
+				ce->trellis_size * ce->trelw);
 	if (!ce->trellis)
 	    goto out_err;
+
+	if (ce->trelw < ce->num_states) {
+	    ce->tmptrel = o->zalloc(o, sizeof(*ce->tmptrel) * ce->num_states);
+	    if (!ce->tmptrel)
+		goto out_err;
+	    ce->tmptrelmap = o->zalloc(o, (sizeof(*ce->tmptrelmap)
+					   * ce->num_states));
+	    if (!ce->tmptrelmap)
+		goto out_err;
+	    ce->trelmap = o->zalloc(o, sizeof(*ce->trellis) * ce->num_states);
+	    if (!ce->trelmap)
+		goto out_err;
+	}
 
 	ce->curr_path_values = o->zalloc(o, sizeof(*ce->curr_path_values)
 					 * ce->num_states);
@@ -552,6 +576,65 @@ get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
 #endif
 }
 
+static int
+cmp_states(struct convcode *ce,
+	   convcode_state state1, convcode_state state2,
+	   convcode_state pstate1, convcode_state pstate2)
+{
+    bool invalid1 = ce->trelmap[pstate1] >> CONVCODE_MAX_K;
+    bool invalid2 = ce->trelmap[pstate2] >> CONVCODE_MAX_K;
+    unsigned int dist1 = ce->next_path_values[ce->tmptrelmap[state1]];
+    unsigned int dist2 = ce->next_path_values[ce->tmptrelmap[state2]];
+
+    /* Entries going back to invalid pstates are always bigger. */
+    if (invalid1 && !invalid2)
+	return 1;
+    if (!invalid1 && invalid2)
+	return -1;
+    if (invalid1 && invalid2)
+	return 0; /* Doesn't really matter, neither will be used. */
+
+    if (dist1 < dist2)
+	return -1;
+    if (dist2 > dist1)
+	return 1;
+    return 0;
+}
+
+static void
+sort_tmptrel(struct convcode *ce)
+{
+#if 1
+    unsigned int i, j;
+
+    for (i = 0; i < ce->num_states - 1; i++) {
+	unsigned int smallest = i;
+
+	/* Find the smallest value */
+	for (j = i + 1; j < ce->num_states; j++) {
+	    convcode_state pstate1 = CONVCODE_PSTATE_VAL(ce->tmptrel[smallest]);
+	    convcode_state pstate2 = CONVCODE_PSTATE_VAL(ce->tmptrel[j]);
+
+	    if (cmp_states(ce, j, smallest, pstate2, pstate1) < 0)
+		smallest = j;
+	}
+
+	if (smallest != i) {
+	    unsigned int tmp;
+
+	    /* Put the smallest value into i */
+	    tmp = ce->tmptrel[smallest];
+	    ce->tmptrel[smallest] = ce->tmptrel[i];
+	    ce->tmptrel[i] = tmp;
+	    tmp = ce->tmptrelmap[smallest];
+	    ce->tmptrelmap[smallest] = ce->tmptrelmap[i];
+	    ce->tmptrelmap[i] = tmp;
+	}
+    }
+#else
+#endif
+}
+
 /*
  * We come here with a symbol (the number of bits is the number of
  * polynomials) The uncertainty is an array of 8-bit values, one for
@@ -563,9 +646,15 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
     unsigned int *currp = ce->curr_path_values;
     unsigned int *nextp = ce->next_path_values;
     unsigned int i;
+    convcode_state *trel;
 
     if (ce->ctrellis + ce->num_polys > ce->trellis_size)
 	return 1;
+
+    if (ce->tmptrel)
+	trel = ce->tmptrel;
+    else
+	trel = get_trellis_column(ce, ce->ctrellis);
 
     for (i = 0; i < ce->num_states; i++) {
 	convcode_state pstate1, pstate2;
@@ -590,27 +679,80 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 				  bits, uncertainty);
 
 	if (dist2 < dist1) {
-	    set_trellis_entry(ce, ce->ctrellis, i,
-			      pstate2 | (bit2 << CONVCODE_MAX_K));
+	    trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
 	    nextp[i] = dist2;
 	} else {
-	    set_trellis_entry(ce, ce->ctrellis, i,
-			      pstate1 | (bit1 << CONVCODE_MAX_K));
+	    trel[i] = pstate1 | (bit1 << CONVCODE_MAX_K);
 	    nextp[i] = dist1;
 	}
     }
+
 #if CONVCODE_DEBUG_STATES
-    printf("T(%u) %x\n", ce->ctrellis, bits);
+    printf("\nT(%u) %x\n", ce->ctrellis, bits);
     for (i = 0; i < ce->num_states; i++) {
-	printf(" %4.4u", get_trellis_entry(ce, ce->ctrellis, i));
-    }
-    printf("\n");
-    for (i = 0; i < ce->num_states; i++) {
-	printf(" %4.4u", nextp[i]);
+	convcode_state pstate = CONVCODE_PSTATE_VAL(trel[i]);
+	int bit = CONVCODE_PSTATE_BIT(trel[i]);
+
+	printf(" %u:%d:%4.4u", i, bit, pstate);
     }
     printf("\n");
 #endif
+
+    if (ce->tmptrel) {
+	convcode_state *ntrel = get_trellis_column(ce, ce->ctrellis);
+
+	for (i = 0; i < ce->num_states; i++)
+	    ce->tmptrelmap[i] = i;
+
+	sort_tmptrel(ce);
+
+	if (ce->ctrellis == 0) {
+	    /* Previous state doesn't matter here, we only need the bit. */
+	    for (i = 0; i < ce->trelw; i++) {
+		ntrel[i] = CONVCODE_PSTATE_BIT(trel[i]) << CONVCODE_MAX_K;
+	    }
+	} else {
+	    for (i = 0; i < ce->trelw; i++) {
+		convcode_state pstate = CONVCODE_PSTATE_VAL(trel[i]);
+		int bit = CONVCODE_PSTATE_BIT(trel[i]);
+
+		ntrel[i] = ce->trelmap[pstate] | (bit << CONVCODE_MAX_K);
+	    }
+	}
+
+	for (i = 0; i < ce->trelw; i++)
+	    ce->trelmap[ce->tmptrelmap[i]] = i;
+	for (; i < ce->num_states; i++)
+	    /* mark invalid */
+	    ce->trelmap[ce->tmptrelmap[i]] = 1 << CONVCODE_MAX_K;
+    }
+
+#if CONVCODE_DEBUG_STATES
+    if (ce->trelmap) {
+	for (i = 0; i < ce->trelw; i++) {
+	    convcode_state pstate = get_trellis_entry(ce, ce->ctrellis, i);
+	    int bit = CONVCODE_PSTATE_BIT(pstate);
+
+	    pstate = CONVCODE_PSTATE_VAL(pstate);
+	    printf(" %u:%d:%4.4u", i, bit, pstate);
+	}
+	printf("\n");
+	for (i = 0; i < ce->trelw; i++)
+	    printf(" %u:%4.4u", i, ce-> tmptrelmap[i]);
+	printf("\n");
+	for (i = 0; i < ce->num_states; i++) {
+	    if (!(ce->trelmap[i] & (1 << CONVCODE_MAX_K)))
+		printf(" %u:%u", i, ce->trelmap[i]);
+	}
+	printf("\n");
+    }
+    for (i = 0; i < ce->num_states; i++)
+	printf(" %u:%4.4u", i, nextp[i]);
+    printf("\n");
+#endif
     ce->ctrellis++;
+
+    /* Swap the values so we don't have to copy next to curr. */
     ce->next_path_values = currp;
     ce->curr_path_values = nextp;
     return 0;
@@ -715,10 +857,15 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
     unsigned int min_val = ce->curr_path_values[0], cstate = 0;
 
     /* Find the minimum value in the final path. */
-    for (i = 1; i < ce->num_states; i++) {
-	if (ce->curr_path_values[i] < min_val) {
-	    cstate = i;
-	    min_val = ce->curr_path_values[i];
+    if (ce->trelmap) {
+	/* Minimum value is always at 0 because it's sorted. */
+	cstate = 0;
+    } else {
+	for (i = 1; i < ce->num_states; i++) {
+	    if (ce->curr_path_values[i] < min_val) {
+		cstate = i;
+		min_val = ce->curr_path_values[i];
+	    }
 	}
     }
 
@@ -731,6 +878,10 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 	pstate = get_trellis_entry(ce, i, cstate);
 	bit = CONVCODE_PSTATE_BIT(pstate);
 	pstate = CONVCODE_PSTATE_VAL(pstate);
+#if CONVCODE_DEBUG_STATES
+	assert(pstate < ce->trelw);
+#endif
+
 	/*
 	 * Store the bit values in position 0 so we can play it back
 	 * forward easily.
@@ -770,12 +921,18 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 	return 1;
 
     /* Find the minimum value in the final path. */
-    min_val = ce->curr_path_values[0];
-    cstate = 0;
-    for (i = 1; i < ce->num_states; i++) {
-	if (ce->curr_path_values[i] < min_val) {
-	    cstate = i;
-	    min_val = ce->curr_path_values[i];
+    if (ce->trelmap) {
+	/* Minimum value is always at 0 because it's sorted. */
+	cstate = 0;
+	min_val = ce->curr_path_values[0];
+    } else {
+	min_val = ce->curr_path_values[0];
+	cstate = 0;
+	for (i = 1; i < ce->num_states; i++) {
+	    if (ce->curr_path_values[i] < min_val) {
+		cstate = i;
+		min_val = ce->curr_path_values[i];
+	    }
 	}
     }
 
@@ -792,6 +949,9 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 	pstate = get_trellis_entry(ce, i, cstate);
 	bit = CONVCODE_PSTATE_BIT(pstate);
 	pstate = CONVCODE_PSTATE_VAL(pstate);
+#if CONVCODE_DEBUG_STATES
+	assert(pstate < ce->trelw);
+#endif
 
 	/*
 	 * Store the bit values in the user-supplied data.
@@ -960,7 +1120,8 @@ handle_test_output(struct convcode *ce, void *output_data, unsigned char byte,
 
 static unsigned int
 run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
-	 bool do_tail, const char *encoded, const char *decoded,
+	 bool do_tail, convcode_state trellis_width,
+	 const char *encoded, const char *decoded,
 	 unsigned int expected_errs, uint8_t *uncertainty,
 	 unsigned int *out_uncertainties)
 {
@@ -971,7 +1132,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 
     len = strlen(decoded);
     o->bytes_allocated = 0;
-    ce = alloc_convcode(o, k, polys, npolys, len, 0,
+    ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
 			do_tail, false,
 			handle_test_output, &t,
 			handle_test_output, &t);
@@ -1084,7 +1245,7 @@ rand_block_test(struct convcode *ce,
 {
     struct test_data t;
     unsigned int i, dec_nbits, enc_nbits;
-    unsigned int rv;
+    unsigned int rv = 0;
 
     reinit_convcode(ce);
     memset(t.enc_bytes, 0, sizeof(t.enc_bytes));
@@ -1131,7 +1292,7 @@ rand_block_test(struct convcode *ce,
 
 static unsigned int
 rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
-	  bool do_tail, bool recursive)
+	  bool do_tail, convcode_state trellis_width, bool recursive)
 {
     struct test_data t;
     struct convcode *ce;
@@ -1142,7 +1303,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 
     len = 32;
     o->bytes_allocated = 0;
-    ce = alloc_convcode(o, k, polys, npolys, len, 0,
+    ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
 			do_tail, recursive,
 			handle_test_output, &t,
 			handle_test_output, &t);
@@ -1183,7 +1344,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 }
 
 static int
-run_tests(bool do_tail)
+run_tests(bool do_tail, convcode_state trellis_width)
 {
     unsigned int errs = 0;
     srand(time(NULL));
@@ -1194,32 +1355,32 @@ run_tests(bool do_tail)
 	    0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1
 	};
 	if (do_tail) {
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "0011010010011011110100011100110111",
 			     "010111001010001", 0, NULL, NULL);
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "0011010010011011110000011100110111",
 			     "010111001010001", 1, NULL, out_uncertainties);
 	} else {
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "001101001001101111010001110011",
 			     "010111001010001", 0, NULL, NULL);
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "001101001001101111000001110011",
 			     "010111001010001", 1, NULL, out_uncertainties);
 	}
-	errs += rand_test(3, polys, 2, do_tail, false);
+	errs += rand_test(3, polys, 2, do_tail, trellis_width, false);
     }
     {
 	convcode_state polys[2] = { 3, 7 };
 	if (do_tail) {
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "0111101000110000", "101100", 0, NULL, NULL);
 	} else {
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "011110100011", "101100", 0, NULL, NULL);
 	}
-	errs += rand_test(3, polys, 2, do_tail, false);
+	errs += rand_test(3, polys, 2, do_tail, trellis_width, false);
     }
     {
 	convcode_state polys[2] = { 5, 3 };
@@ -1235,25 +1396,25 @@ run_tests(bool do_tail)
 	    0, 100, 100, 100, 100, 100, 100
 	};
 	if (do_tail) {
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "100111101110010111", "1001101", 0, NULL, NULL);
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "110111101100010111", "1001101", 2, NULL,
 			     out_uncertainties1);
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "100111101110010111", "1001101",
 			     100, uncertainties, out_uncertainties2);
 	} else {
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "10011110111001", "1001101", 0, NULL, NULL);
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "11011110110001", "1001101", 2, NULL,
 			     out_uncertainties1);
-	    errs += run_test(3, polys, 2, do_tail,
+	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "10011110111001", "1001101",
 			     100, uncertainties, out_uncertainties2);
 	}
-	errs += rand_test(3, polys, 2, do_tail, false);
+	errs += rand_test(3, polys, 2, do_tail, trellis_width, false);
     }
     { /* Voyager */
 	convcode_state polys[2] = { 0171, 0133 };
@@ -1267,15 +1428,15 @@ run_tests(bool do_tail)
 	    0, 0, 100, 100, 100, 100, 100, 100
 	};
 	if (do_tail) {
-	    errs += run_test(7, polys, 2, do_tail,
+	    errs += run_test(7, polys, 2, do_tail, trellis_width,
 			     "0011100010011010100111011100", "01011010",
 			     100, uncertainties, out_uncertainties);
 	} else {
-	    errs += run_test(7, polys, 2, do_tail,
+	    errs += run_test(7, polys, 2, do_tail, trellis_width,
 			     "0011100010011010", "01011010",
 			     100, uncertainties, out_uncertainties);
 	}
-	errs += rand_test(7, polys, 2, do_tail, false);
+	errs += rand_test(7, polys, 2, do_tail, trellis_width, false);
     }
     { /* LTE */
 	convcode_state polys[3] = { 0117, 0127, 0155 };
@@ -1286,33 +1447,33 @@ run_tests(bool do_tail)
 	    2, 2, 2, 3, 3, 4, 4, 4
 	};
 	if (do_tail) {
-	    errs += run_test(7, polys, 3, do_tail,
+	    errs += run_test(7, polys, 3, do_tail, trellis_width,
 			     "111001101011100110011101111111100110001111",
 			     "10110111", 0, NULL, NULL);
-	    errs += run_test(7, polys, 3, do_tail,
+	    errs += run_test(7, polys, 3, do_tail, trellis_width,
 			     "001001101011100110011100111111100110001011",
 			     "10110111", 4, NULL, out_uncertainties1);
 	} else {
-	    errs += run_test(7, polys, 3, do_tail,
+	    errs += run_test(7, polys, 3, do_tail, trellis_width,
 			     "111001101011100110011101",
 			     "10110111", 0, NULL, NULL);
-	    errs += run_test(7, polys, 3, do_tail,
+	    errs += run_test(7, polys, 3, do_tail, trellis_width,
 			     "001001101010100010011101",
 			     "10110111", 4, NULL, out_uncertainties2);
 	}
-	errs += rand_test(7, polys, 3, do_tail, false);
+	errs += rand_test(7, polys, 3, do_tail, trellis_width, false);
     }
 #if CONVCODE_MAX_K >= 9
     { /* CDMA 2000 */
 	convcode_state polys[4] = { 0671, 0645, 0473, 0537 };
-	errs += rand_test(9, polys, 4, do_tail, false);
+	errs += rand_test(9, polys, 4, do_tail, trellis_width, false);
     }
 #endif
 #if CONVCODE_MAX_K >= 15
     { /* Cassini / Mars Pathfinder */
 	convcode_state polys[7] = { 074000, 046321, 051271, 070535,
 	    063667, 073277, 076513 };
-	errs += rand_test(15, polys, 7, do_tail, false);
+	errs += rand_test(15, polys, 7, do_tail, trellis_width, false);
     }
 #endif
     /*
@@ -1321,15 +1482,15 @@ run_tests(bool do_tail)
      */
     {
 	convcode_state polys[2] = { 5, 5 };
-	errs += rand_test(3, polys, 2, do_tail, true);
+	errs += rand_test(3, polys, 2, do_tail, trellis_width, true);
     }
     { /* Constituent code in 3GPP 25.212 Turbo Code */
 	convcode_state polys[2] = { 012, 015 };
-	errs += rand_test(4, polys, 2, do_tail, true);
+	errs += rand_test(4, polys, 2, do_tail, trellis_width, true);
     }
     {
 	convcode_state polys[2] = { 022, 021 };
-	errs += rand_test(5, polys, 2, do_tail, true);
+	errs += rand_test(5, polys, 2, do_tail, trellis_width, true);
     }
 
     printf("%u errors\n", errs);
@@ -1347,6 +1508,7 @@ main(int argc, char *argv[])
     unsigned int arg, total_bits, num_errs = 0;
     bool decode = false, test = false, do_tail = true, recursive = false;
     unsigned int start_state = 0, init_val = CONVCODE_DEFAULT_INIT_VAL;
+    convcode_state trellis_width = 0;
 
     for (arg = 1; arg < argc; arg++) {
 	if (argv[arg][0] != '-')
@@ -1368,6 +1530,13 @@ main(int argc, char *argv[])
 		return 1;
 	    }
 	    start_state = strtoul(argv[arg], NULL, 0);
+	} else if (strcmp(argv[arg], "-w") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -w\n");
+		return 1;
+	    }
+	    trellis_width = strtoul(argv[arg], NULL, 0);
 	} else if (strcmp(argv[arg], "-i") == 0) {
 	    arg++;
 	    if (arg >= argc) {
@@ -1393,7 +1562,7 @@ main(int argc, char *argv[])
     }
 
     if (test)
-	return run_tests(do_tail);
+	return run_tests(do_tail, trellis_width);
 
     if (num_polys == 0) {
 	fprintf(stderr, "No polynomials (-p) given\n");
@@ -1423,7 +1592,8 @@ main(int argc, char *argv[])
 	len = 0;
     }
     o->bytes_allocated = 0;
-    ce = alloc_convcode(o, k, polys, num_polys, len, 0, do_tail, recursive,
+    ce = alloc_convcode(o, k, polys, num_polys, len, trellis_width,
+			do_tail, recursive,
 			handle_output, NULL,
 			handle_output, NULL);
     if (start_state)

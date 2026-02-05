@@ -81,7 +81,7 @@ struct convcode *alloc_convcode(convcode_os_funcs *o,
 				unsigned int k, convcode_state *polynomials,
 				unsigned int num_polynomials,
 				unsigned int max_decode_len_bits,
-				unsigned int num_trellises,
+				unsigned int trellis_width,
 				bool do_tail, bool recursive,
 				convcode_output enc_output,
 				void *enc_out_user_data,
@@ -406,7 +406,23 @@ struct convcode {
     convcode_state *trellis;
     unsigned int trellis_size;
     unsigned int ctrellis; /* Current trellis value */
-    unsigned int num_trels; /* Number of trellises we keep */
+    unsigned int trelw; /* Width of the trellises */
+
+    /*
+     * A temporary trellis entry, only set/used if trelw < num_states.
+     * We calculate the full set of state values into this and then
+     * compress it into the trellis.  Also a map that is used to map
+     * from the entry to the pstate, since we sort this.
+     */
+    convcode_state *tmptrel;
+    convcode_state *tmptrelmap;
+
+    /*
+     * A map from the previous state to the previous entry in the
+     * trellis, only set/used if trelw < num_states.  If the top bit
+     * is set then the entry is invalid.
+     */
+    convcode_state *trelmap;
 
     /*
      * You don't need the whole path value matrix, you only need the
@@ -444,9 +460,12 @@ struct convcode {
  *  * Allocate the following:
  *    ce->convert - sizeof(*ce->convert) * ce->convert_size
  *  * If you are doing decoding, allocate the following:
- *    ce->trellis - sizeof(*ce->trellis) * ce->trellis_size * ce->num_trels
+ *    ce->trellis - sizeof(*ce->trellis) * ce->trellis_size * ce->trelw
  *    ce->curr_paths_value - sizeof(*ce->curr_path_values) * ce->num_states
  *    ce->next_paths_value - sizeof(*ce->next_path_values) * ce->num_states
+ *    if trelw < num_states
+ *      ce->tmptrel - sizeof(*ce->trellis) * ce->trelw
+ *      ce->trelmap - sizeof(*ce->trellis) * ce->trelw
  *  * Call setup_convcode2(ce)
  *  * Call reinit_convcode(ce)
  *
@@ -464,7 +483,7 @@ struct convcode {
 int setup_convcode1(struct convcode *ce, unsigned int k,
 		    convcode_state *polynomials, unsigned int num_polynomials,
 		    unsigned int max_decode_len_bits,
-		    unsigned int num_trellises,
+		    unsigned int trellis_width,
 		    bool do_tail, bool recursive);
 
 /* See the above discussion for how to use this. */
