@@ -611,6 +611,12 @@ cmp_states(const void *val1, const void *val2, void *ud)
 	rv = -1;
     } else if (dist1 > dist2) {
 	rv = 1;
+#if 0 /* The below will give an exact sort order. */
+    } else if (state1 < state2) {
+	rv = -1;
+    } else if (state1 > state2) {
+	rv = 1;
+#endif
     }
     return rv;
 }
@@ -618,15 +624,23 @@ cmp_states(const void *val1, const void *val2, void *ud)
 static void
 sort_tmptrel(struct convcode *ce)
 {
-#if 0
+#if 1
+    /*
+     * This is an optimized selection sort.  We only care about the
+     * trewl smallest values, so we only grab that many.  This is
+     * generally faster than any normal sort unless trelw is very
+     * large.  If trelw is large, ifdef out this section for the
+     * quicksort implementation.
+     */
     unsigned int i, j;
 
-    for (i = 0; i < ce->num_states - 1; i++) {
+    for (i = 0; i < ce->trelw; i++) {
 	unsigned int smallest = i;
 
 	/* Find the smallest value */
 	for (j = i + 1; j < ce->num_states; j++) {
-	    if (cmp_states(&j, &smallest, ce) < 0)
+	    if (cmp_states(&ce->tmptrelmap[j], &ce->tmptrelmap[smallest],
+			   ce) < 0)
 		smallest = j;
 	}
 
@@ -640,8 +654,12 @@ sort_tmptrel(struct convcode *ce)
 	}
     }
 #else
-    qsort_r(ce->tmptrelmap, ce->num_states, sizeof(*ce->tmptrelmap),
-	    cmp_states, ce);
+    /* If you have a large trelw value, this might perform better. */
+#include "qsort.h"
+    convcode_state tmp;
+#define LESS(i, j) (cmp_states(&ce->tmptrelmap[i], &ce->tmptrelmap[j], ce) < 0)
+#define SWAP(i, j) tmp = ce->tmptrelmap[i], ce->tmptrelmap[i] = ce->tmptrelmap[j], ce->tmptrelmap[j] = tmp
+    QSORT(ce->num_states, LESS, SWAP);
 #endif
 
 #if 0
