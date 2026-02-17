@@ -216,6 +216,13 @@ int convencode_data(struct convcode *ce,
 		    const unsigned char *bytes, unsigned int nbits);
 
 /*
+ * Feed a single bit into encoder.  bit must be 1 or 0.
+ *
+ * You can feed data in with multiple calls.  Returns an error
+ */
+int convencode_bit(struct convcode *ce, unsigned int bit);
+
+/*
  * Once all the data has been fed for encoding, you must call this to
  * finish the operation.  The last output will be done from here.  The
  * total number of bits generated is returned in total_out_bits;
@@ -352,7 +359,7 @@ struct convcode_outdata {
      * For encoding, this enables outputing the bytes in a per-symbol
      * basis instead of a per-byte basis.  So, for instance, if
      * num_polynomials is 3, you would get output in 3-bit chunks.
-     * Not really useful for decoding.
+     * For decoding this will give you the data a bit at a time.
      */
     bool output_symbol_size;
 
@@ -440,8 +447,8 @@ struct convcode {
 
     /*
      * You don't need the whole path value matrix, you only need the
-     * previous (current) one and the next one (the one you are
-     * working on).  Each of these is num_states elements.
+     * previous one and the current one (the one you are working on).
+     * Each of these is num_states elements.
      */
     unsigned int *prev_path_values;
     unsigned int *curr_path_values;

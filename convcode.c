@@ -384,8 +384,8 @@ output_bits(struct convcode *ce, struct convcode_outdata *of,
     return rv;
 }
 
-static int
-encode_bit(struct convcode *ce, unsigned int bit)
+int
+convencode_bit(struct convcode *ce, unsigned int bit)
 {
     convcode_state state = ce->enc_state;
     ce->enc_state = ce->next_state[bit][state];
@@ -404,7 +404,7 @@ convencode_data(struct convcode *ce,
 	unsigned char byte = bytes[i];
 
 	for (j = 0; nbits > 0 && j < 8; j++) {
-	    rv = encode_bit(ce, byte & 1);
+	    rv = convencode_bit(ce, byte & 1);
 	    byte >>= 1;
 	    if (rv)
 		return rv;
@@ -422,7 +422,7 @@ convencode_finish(struct convcode *ce, unsigned int *total_out_bits)
 
     if (ce->do_tail) {
 	for (i = 0; i < ce->k - 1; i++) {
-	    rv = encode_bit(ce, 0);
+	    rv = convencode_bit(ce, 0);
 	    if (rv)
 		return rv;
 	}
