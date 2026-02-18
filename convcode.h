@@ -276,6 +276,15 @@ int convdecode_data(struct convcode *ce,
 		    const uint8_t *uncertainty);
 
 /*
+ * Push a single symbol into the decoder.  The symbol should have k
+ * bits (the polynomial size) starting at bit zero.  uncertainty can
+ * be NULL if not using it, but if supplied should be an array of k
+ * uncertainty values.
+ */
+int convdecode_symbol(struct convcode *ce, unsigned int symbol,
+		      const uint8_t *uncertainty);
+
+/*
  * Once all the data has been fed for decoding, you must call this to
  * finish the operation.  Output will be done from here.  The total
  * number of bits generated is returned in total_out_bits;  The total

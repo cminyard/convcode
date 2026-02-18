@@ -681,8 +681,9 @@ sort_tmptrel(struct convcode *ce)
  * polynomials) The uncertainty is an array of 8-bit values, one for
  * each bit, low bit first.
  */
-static int
-decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
+int
+convdecode_symbol(struct convcode *ce, unsigned int symbol,
+		  const uint8_t *uncertainty)
 {
     unsigned int *prevp = ce->prev_path_values;
     unsigned int *currp = ce->curr_path_values;
@@ -713,11 +714,11 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 	dist1 = prevp[pstate1];
 	bit1 = get_prev_bit(ce, pstate1, i);
 	dist1 += hamming_distance(ce, ce->convert[bit1][pstate1],
-				  bits, uncertainty);
+				  symbol, uncertainty);
 	dist2 = prevp[pstate2];
 	bit2 = get_prev_bit(ce, pstate2, i);
 	dist2 += hamming_distance(ce, ce->convert[bit2][pstate2],
-				  bits, uncertainty);
+				  symbol, uncertainty);
 
 	if (dist2 < dist1) {
 	    trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
@@ -808,10 +809,12 @@ decode_bits(struct convcode *ce, unsigned int bits, const uint8_t *uncertainty)
 static unsigned int
 extract_bits(const unsigned char *bytes, unsigned int curr, unsigned int nbits)
 {
-    unsigned int pos = curr / 8;
+    unsigned int v = 0;
+    unsigned int bits_left = nbits;
     unsigned int opos = 0;
-    unsigned int bit = curr % 8, bits_left = nbits;
-    unsigned int v = 0, byte_avail;
+    unsigned int pos = curr / 8;
+    unsigned int bit = curr % 8;
+    unsigned int byte_avail;
 
     byte_avail = 8 - bit;
     while (byte_avail <= bits_left) {
@@ -861,10 +864,10 @@ convdecode_data(struct convcode *ce,
 	if (uncertainty) {
 	    for (i = 0; i < extract_size; i++)
 		ce->leftover_uncertainty[ce->leftover_bits++] = uncertainty[i];
-	    rv = decode_bits(ce, ce->leftover_bits_data,
-			     ce->leftover_uncertainty);
+	    rv = convdecode_symbol(ce, ce->leftover_bits_data,
+				   ce->leftover_uncertainty);
 	} else {
-	    rv = decode_bits(ce, ce->leftover_bits_data, NULL);
+	    rv = convdecode_symbol(ce, ce->leftover_bits_data, NULL);
 	}
 	ce->leftover_bits = 0;
     }
@@ -873,9 +876,9 @@ convdecode_data(struct convcode *ce,
 	unsigned int bits = extract_bits(bytes, curr_bit, ce->num_polys);
 
 	if (uncertainty)
-	    rv = decode_bits(ce, bits, uncertainty + curr_bit);
+	    rv = convdecode_symbol(ce, bits, uncertainty + curr_bit);
 	else
-	    rv = decode_bits(ce, bits, NULL);
+	    rv = convdecode_symbol(ce, bits, NULL);
 	if (rv)
 	    return rv;
 	curr_bit += ce->num_polys;
@@ -955,7 +958,8 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 int
 convdecode_block(struct convcode *ce, const unsigned char *bytes,
 		 unsigned int nbits, const uint8_t *uncertainty,
-		 unsigned char *outbytes, unsigned int *output_uncertainty,
+		 unsigned char *outbytes,
+		 unsigned int *output_uncertainty,
 		 unsigned int *num_errs)
 {
     unsigned int i, extra_bits = 0;
