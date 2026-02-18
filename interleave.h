@@ -23,16 +23,18 @@
  * Interleaving spreads the bits out so that consecutive bits coming
  * into the decoder are not consecutive bits from the receiver.  It
  * does this by treating the data as an array of bits that is
- * interleave_size wide and data_length / interleave_size long (plus
- * an extra entry for any leftover bits).  Data is added by adding
- * individual bits starting with column 0 and down the rows, and after
- * a columnis complete go back to row 0 and go down column 1,
- * etc. taking care with the entries in the last row not to index past
- * the end of the array.
+ * interleave_len wide and total_size / interleave_len long (plus an
+ * extra entry for any leftover bits).
  *
- * To avoid having to have a separate array to interleave into for
- * encoding, the data is read out of the array row first.  On decoding
- * it is put in the same way.
+ * For encoding, data is pulled out of the source array array starting
+ * with column 0 and down the rows, and after a column is complete go
+ * back to row 0 and go down column 1, etc. taking care with the
+ * entries in the last row not to index past the end of the array.
+ *
+ * For decoding, the opposite is done, you feed bits into the decoder
+ * and it puts it into the output bit array.
+ *
+ * Bits are numbered with the low bit in a byte first.
  */
 
 struct interleaver {

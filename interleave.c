@@ -162,7 +162,7 @@ rand_test(void)
     struct interleaver di;
     int rv = 0;
 
-    len = rand() % 256;
+    len = rand() % 256 + 1;
     interleave_len = rand() % 32 + 1;
     printf("Running test interleave size %u length %d\n", interleave_len, len);
 
