@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 Corey Minyard
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include "interleave.h"
 
