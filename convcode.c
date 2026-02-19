@@ -122,14 +122,14 @@ free_convcode(struct convcode *ce)
 {
     convcode_os_funcs *o = ce->o;
 
-    if (ce->convert[0])
-	o->free(o, ce->convert[0]);
-    if (ce->convert[1])
-	o->free(o, ce->convert[1]);
-    if (ce->next_state[0])
-	o->free(o, ce->next_state[0]);
-    if (ce->next_state[1])
-	o->free(o, ce->next_state[1]);
+    if (ce->states_alloced && ce->convert[0])
+	o->free(o, (void *) ce->convert[0]);
+    if (ce->states_alloced && ce->convert[1])
+	o->free(o, (void *) ce->convert[1]);
+    if (ce->states_alloced && ce->next_state[0])
+	o->free(o, (void *) ce->next_state[0]);
+    if (ce->states_alloced && ce->next_state[1])
+	o->free(o, (void *) ce->next_state[1]);
     if (ce->trellis)
 	o->free(o, ce->trellis);
     if (ce->tmptrel)
@@ -190,6 +190,12 @@ setup_convcode2(struct convcode *ce)
 {
     unsigned int val, i, j;
     convcode_state state_mask = ce->num_states - 1;
+    convcode_symsize **conv = (convcode_symsize **) ce->convert;
+    convcode_state **next_state = (convcode_state **) ce->next_state;
+
+    if (!ce->states_alloced)
+	/* Tables were passed in. */
+	return;
 
     /*
      * Calculate the encoder output arrays and the next state arrays.
@@ -199,27 +205,27 @@ setup_convcode2(struct convcode *ce)
      */
     if (!ce->recursive) {
 	for (i = 0; i < ce->num_states; i++) {
-	    ce->convert[0][i] = 0;
-	    ce->convert[1][i] = 0;
+	    conv[0][i] = 0;
+	    conv[1][i] = 0;
 	    /* Go through each polynomial to calculate the output. */
 	    for (j = 0; j < ce->num_polys; j++) {
 		val = num_bits_is_odd((i << 1) & ce->polys[j]);
-		ce->convert[0][i] |= val << j;
+		conv[0][i] |= val << j;
 		val = num_bits_is_odd(((i << 1) | 1) & ce->polys[j]);
-		ce->convert[1][i] |= val << j;
+		conv[1][i] |= val << j;
 	    }
 
 	    /* Next state is easy, just shift in the value and mask. */
-	    ce->next_state[0][i] = (i << 1) & state_mask;
-	    ce->next_state[1][i] = ((i << 1) | 1) & state_mask;
+	    next_state[0][i] = (i << 1) & state_mask;
+	    next_state[1][i] = ((i << 1) | 1) & state_mask;
 	}
     } else {
 	for (i = 0; i < ce->num_states; i++) {
 	    convcode_state bval0, bval1;
 
 	    /* In recursive, the first output bit is always the value. */
-	    ce->convert[0][i] = 0;
-	    ce->convert[1][i] = 1;
+	    conv[0][i] = 0;
+	    conv[1][i] = 1;
 
 	    /*
 	     * This is the recursive bit calculated from the feedback
@@ -233,14 +239,14 @@ setup_convcode2(struct convcode *ce)
 	     */
 	    for (j = 1; j < ce->num_polys; j++) {
 		val = num_bits_is_odd(((i << 1) | bval0) & ce->polys[j]);
-		ce->convert[0][i] |= val << j;
+		conv[0][i] |= val << j;
 		val = num_bits_is_odd(((i << 1) | bval1) & ce->polys[j]);
-		ce->convert[1][i] |= val << j;
+		conv[1][i] |= val << j;
 	    }
 
 	    /* Shift the recursive bit in to get the next state. */
-	    ce->next_state[0][i] = ((i << 1) | bval0) & state_mask;
-	    ce->next_state[1][i] = ((i << 1) | bval1) & state_mask;
+	    next_state[0][i] = ((i << 1) | bval0) & state_mask;
+	    next_state[1][i] = ((i << 1) | bval1) & state_mask;
 	}
     }
 #if CONVCODE_DEBUG_STATES
@@ -268,9 +274,15 @@ alloc_convcode(convcode_os_funcs *o,
 	       unsigned int trellis_width,
 	       bool do_tail, bool recursive,
 	       convcode_output enc_output, void *enc_out_user_data,
-	       convcode_output dec_output, void *dec_out_user_data)
+	       convcode_output dec_output, void *dec_out_user_data,
+	       const convcode_symsize * const *convert,
+	       const convcode_state * const *next_state)
 {
     struct convcode *ce;
+
+    if (!!convert != !!next_state)
+	/* if you provide one state table, you must provide both. */
+	return NULL;
 
     ce = o->zalloc(o, sizeof(*ce));
     if (!ce)
@@ -283,26 +295,34 @@ alloc_convcode(convcode_os_funcs *o,
     }
 
     ce->o = o;
+    ce->states_alloced = !convert;
     ce->enc_out.output = enc_output;
     ce->enc_out.user_data = enc_out_user_data;
     ce->dec_out.output = dec_output;
     ce->dec_out.user_data = dec_out_user_data;
 
-    ce->convert[0] = o->zalloc(o, sizeof(convcode_symsize) * ce->num_states);
-    if (!ce->convert[0])
-	goto out_err;
+    if (!ce->states_alloced) {
+	ce->convert[0] = convert[0];
+	ce->convert[1] = convert[1];
+	ce->next_state[0] = next_state[0];
+	ce->next_state[1] = next_state[1];
+    } else {
+	ce->convert[0] = o->zalloc(o, sizeof(convcode_symsize) * ce->num_states);
+	if (!ce->convert[0])
+	    goto out_err;
 
-    ce->convert[1] = o->zalloc(o, sizeof(convcode_symsize) * ce->num_states);
-    if (!ce->convert[1])
-	goto out_err;
+	ce->convert[1] = o->zalloc(o, sizeof(convcode_symsize) * ce->num_states);
+	if (!ce->convert[1])
+	    goto out_err;
 
-    ce->next_state[0] = o->zalloc(o, sizeof(convcode_state) * ce->num_states);
-    if (!ce->next_state[0])
-	goto out_err;
+	ce->next_state[0] = o->zalloc(o, sizeof(convcode_state) * ce->num_states);
+	if (!ce->next_state[0])
+	    goto out_err;
 
-    ce->next_state[1] = o->zalloc(o, sizeof(convcode_state) * ce->num_states);
-    if (!ce->next_state[1])
-	goto out_err;
+	ce->next_state[1] = o->zalloc(o, sizeof(convcode_state) * ce->num_states);
+	if (!ce->next_state[1])
+	    goto out_err;
+    }
 
     if (max_decode_len_bits > 0) {
 	/* Add on a bit for the stuff at the end. */
@@ -1044,7 +1064,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  * To supply your own input and output, run as:
  *
  * ./convcode [-t] [-x] [-w <trellis width>] [-s <start state>] [-i <init_val>]
- *        -p <poly1> [ -p <poly2> ... ] k <bits>
+ *        -p <poly1> [ -p <poly2> ... ] [-g] k <bits>
  *
  * where bits is a sequence of 0 or 1.  The -x option disables the
  * "tail" of the encoder and expectation of the tail in the decoder.
@@ -1058,6 +1078,9 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  * and for decoding the init value for the probability matrix for
  * values besides the start state.  See the discussion on tails in
  * convcode.h for detail.
+ *
+ * The -g option generates the convert and next_state tables that can
+ * be passed into alloc_convcode().
  *
  * For instance, to decode some data with the Voyager coder, do:
  *
@@ -1185,7 +1208,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
 			do_tail, false,
 			handle_test_output, &t,
-			handle_test_output, &t);
+			handle_test_output, &t, NULL, NULL);
     printf("Test k=%u %s err=%u polys={ 0%o", k, do_tail ? "tail" : "notail",
 	   expected_errs, polys[0]);
     for (i = 1; i < npolys; i++)
@@ -1358,7 +1381,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
 			do_tail, recursive,
 			handle_test_output, &t,
-			handle_test_output, &t);
+			handle_test_output, &t, NULL, NULL);
     if (recursive)
 	set_encode_output_per_symbol(ce, true);
 
@@ -1556,6 +1579,23 @@ run_tests(bool do_tail, convcode_state trellis_width)
     return !!errs;
 }
 
+static void
+output_tables(struct convcode *ce)
+{
+    unsigned int i;
+
+    printf("const convcode_symsize *convcode_convert[2] = {\n");
+    for (i = 0; i < ce->num_states; i++)
+	printf("    { 0x%x, 0x%x },\n",
+	       ce->convert[0][i], ce->convert[1][i]);
+    printf("};\n");
+    printf("const state *convcode_next_state[2] = {\n");
+    for (i = 0; i < ce->num_states; i++)
+	printf("    { 0x%x, 0x%x },\n",
+	       ce->next_state[0][i], ce->next_state[1][i]);
+    printf("};\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1566,6 +1606,7 @@ main(int argc, char *argv[])
     struct convcode *ce;
     unsigned int arg, total_bits, num_errs = 0;
     bool decode = false, test = false, do_tail = true, recursive = false;
+    bool gen_tables = false;
     unsigned int start_state = 0, init_val = CONVCODE_DEFAULT_INIT_VAL;
     convcode_state trellis_width = 0;
 
@@ -1582,6 +1623,8 @@ main(int argc, char *argv[])
 	    do_tail = false;
 	} else if (strcmp(argv[arg], "-r") == 0) {
 	    recursive = true;
+	} else if (strcmp(argv[arg], "-g") == 0) {
+	    gen_tables = true;
 	} else if (strcmp(argv[arg], "-s") == 0) {
 	    arg++;
 	    if (arg >= argc) {
@@ -1640,11 +1683,6 @@ main(int argc, char *argv[])
 	return 1;
     }
 
-    if (arg >= argc) {
-	fprintf(stderr, "No data given\n");
-	return 1;
-    }
-
     if (decode) {
 	len = (strlen(argv[arg]) / num_polys) - (k - 1);
     } else {
@@ -1654,11 +1692,16 @@ main(int argc, char *argv[])
     ce = alloc_convcode(o, k, polys, num_polys, len, trellis_width,
 			do_tail, recursive,
 			handle_output, NULL,
-			handle_output, NULL);
+			handle_output, NULL, NULL, NULL);
     if (start_state)
 	reinit_convencode(ce, start_state);
     if (!decode && (start_state || init_val != CONVCODE_DEFAULT_INIT_VAL))
 	reinit_convdecode(ce, start_state, init_val);
+
+    if (gen_tables) {
+	output_tables(ce);
+	goto do_free;
+    }
 
     if (arg >= argc) {
 	fprintf(stderr, "No data given\n");
@@ -1675,6 +1718,10 @@ main(int argc, char *argv[])
 
     printf("\n  bits = %u\n", total_bits);
     printf("  allocated %lu bytes\n", o->bytes_allocated);
+
+ do_free:
+    free_convcode(ce);
+
     return 0;
 }
 #endif

@@ -84,6 +84,13 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  *
  * If output function returns an error, the operation is stopped and the
  * error will be returned from the various functions.
+ *
+ * It is possible to pre-create your own convert and next_state tables
+ * and pass them in to here.  This is useful for constrained
+ * environments where the tables could be stored in ROM/FLASH.  They
+ * must, of course, match the rest of the data.  You can use the -g
+ * option of convcode command.  Otherwise pass in NULL for convert and
+ * next_state.
  */
 struct convcode *alloc_convcode(convcode_os_funcs *o,
 				unsigned int k, convcode_state *polynomials,
@@ -94,7 +101,9 @@ struct convcode *alloc_convcode(convcode_os_funcs *o,
 				convcode_output enc_output,
 				void *enc_out_user_data,
 				convcode_output dec_output,
-				void *dec_out_user_data);
+				void *dec_out_user_data,
+				const convcode_symsize * const *convert,
+				const convcode_state * const *next_state);
 
 
 /*
@@ -411,14 +420,22 @@ struct convcode {
 
     /*
      * For the given state, what is the encoded output?  Indexed first
-     * by the bit, then by the state.
+     * by the bit, then by the state.  The alloc_ values is the one we
+     * allocated, only set if it was not provided at startup.
      */
-    convcode_symsize *convert[2];
+    const convcode_symsize *convert[2];
 
     /*
-     * 2D Array indexed first by bit then by current state.
+     * 2D Array indexed first by bit then by current state.  The
+     * alloc_ values is the one we allocated, only set if it was not
+     * provided at startup.
      */
-    convcode_state *next_state[2];
+    const convcode_state *next_state[2];
+
+    /*
+     * Were the above allocated by us or passed in.
+     */
+    bool states_alloced;
 
     /*
      * Number of states in the state machine, 1 << (k - 1).
