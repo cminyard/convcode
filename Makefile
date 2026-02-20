@@ -6,7 +6,7 @@ all: convcode interleave
 convcode: convcode.o convcode_os_funcs.o
 	gcc $(CFLAGS) -o $@ $^
 
-convcode.o: convcode.c convcode.h convcode_os_funcs.h
+convcode.o: convcode.c convcode.h convcode_os_funcs.h voyager_tab.h
 
 convcode_os_funcs.o: convcode_os_funcs.c convcode_os_funcs.h
 

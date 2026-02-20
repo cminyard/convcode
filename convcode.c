@@ -1367,7 +1367,9 @@ rand_block_test(struct convcode *ce,
 
 static unsigned int
 rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
-	  bool do_tail, convcode_state trellis_width, bool recursive)
+	  bool do_tail, convcode_state trellis_width, bool recursive,
+	  const convcode_symsize * const *convert,
+	  const convcode_state * const *next_state)
 {
     struct test_data t;
     struct convcode *ce;
@@ -1381,7 +1383,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
 			do_tail, recursive,
 			handle_test_output, &t,
-			handle_test_output, &t, NULL, NULL);
+			handle_test_output, &t, convert, next_state);
     if (recursive)
 	set_encode_output_per_symbol(ce, true);
 
@@ -1393,7 +1395,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	printf(", 0%o", polys[i]);
     printf(" } %u bits %lu bytes alloc\n", len, o->bytes_allocated);
 
-    for (i = 8; i < 32; i++) {
+    for (i = 8; i < len; i++) {
 	for (j = 0; j < 10; j++) {
 	    for (bit = 0; bit < i; bit++)
 		decoded[bit] = rand() & 1 ? '1' : '0';
@@ -1417,6 +1419,14 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     free_convcode(ce);
     return rv;
 }
+
+/*
+ * Generated from the -g option of this program with the following
+ * command:
+ *
+ * ./convcode -p 0171 -p 0133 -g 7 >voyager_tab.h
+ */
+#include "voyager_tab.h"
 
 static int
 run_tests(bool do_tail, convcode_state trellis_width)
@@ -1444,7 +1454,8 @@ run_tests(bool do_tail, convcode_state trellis_width)
 			     "001101001001101111000001110011",
 			     "010111001010001", 1, NULL, out_uncertainties);
 	}
-	errs += rand_test(3, polys, 2, do_tail, trellis_width, false);
+	errs += rand_test(3, polys, 2, do_tail, trellis_width, false,
+			  NULL, NULL);
     }
     {
 	convcode_state polys[2] = { 3, 7 };
@@ -1455,7 +1466,8 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "011110100011", "101100", 0, NULL, NULL);
 	}
-	errs += rand_test(3, polys, 2, do_tail, trellis_width, false);
+	errs += rand_test(3, polys, 2, do_tail, trellis_width, false,
+			  NULL, NULL);
     }
     {
 	convcode_state polys[2] = { 5, 3 };
@@ -1489,7 +1501,8 @@ run_tests(bool do_tail, convcode_state trellis_width)
 			     "10011110111001", "1001101",
 			     100, uncertainties, out_uncertainties2);
 	}
-	errs += rand_test(3, polys, 2, do_tail, trellis_width, false);
+	errs += rand_test(3, polys, 2, do_tail, trellis_width, false,
+			  NULL, NULL);
     }
     { /* Voyager */
 	convcode_state polys[2] = { 0171, 0133 };
@@ -1514,7 +1527,8 @@ run_tests(bool do_tail, convcode_state trellis_width)
 				 100, uncertainties, out_uncertainties);
 	    }
 	}
-	errs += rand_test(7, polys, 2, do_tail, trellis_width, false);
+	errs += rand_test(7, polys, 2, do_tail, trellis_width, false,
+			  NULL, NULL);
     }
     { /* LTE */
 	convcode_state polys[3] = { 0117, 0127, 0155 };
@@ -1543,19 +1557,22 @@ run_tests(bool do_tail, convcode_state trellis_width)
 				 "001001101010100010011101",
 				 "10110111", 4, NULL, out_uncertainties2);
 	}
-	errs += rand_test(7, polys, 3, do_tail, trellis_width, false);
+	errs += rand_test(7, polys, 3, do_tail, trellis_width, false,
+			  NULL, NULL);
     }
 #if CONVCODE_MAX_K >= 9
     { /* CDMA 2000 */
 	convcode_state polys[4] = { 0671, 0645, 0473, 0537 };
-	errs += rand_test(9, polys, 4, do_tail, trellis_width, false);
+	errs += rand_test(9, polys, 4, do_tail, trellis_width, false,
+			  NULL, NULL);
     }
 #endif
 #if CONVCODE_MAX_K >= 15
     { /* Cassini / Mars Pathfinder */
 	convcode_state polys[7] = { 074000, 046321, 051271, 070535,
 	    063667, 073277, 076513 };
-	errs += rand_test(15, polys, 7, do_tail, trellis_width, false);
+	errs += rand_test(15, polys, 7, do_tail, trellis_width, false,
+			  NULL, NULL);
     }
 #endif
     /*
@@ -1564,15 +1581,25 @@ run_tests(bool do_tail, convcode_state trellis_width)
      */
     {
 	convcode_state polys[2] = { 5, 5 };
-	errs += rand_test(3, polys, 2, do_tail, trellis_width, true);
+	errs += rand_test(3, polys, 2, do_tail, trellis_width, true,
+			  NULL, NULL);
     }
     { /* Constituent code in 3GPP 25.212 Turbo Code */
 	convcode_state polys[2] = { 012, 015 };
-	errs += rand_test(4, polys, 2, do_tail, trellis_width, true);
+	errs += rand_test(4, polys, 2, do_tail, trellis_width, true,
+			  NULL, NULL);
     }
     {
 	convcode_state polys[2] = { 022, 021 };
-	errs += rand_test(5, polys, 2, do_tail, trellis_width, true);
+	errs += rand_test(5, polys, 2, do_tail, trellis_width, true,
+			  NULL, NULL);
+    }
+
+    /* Test supplying our own state tables. */
+    {
+	convcode_state polys[2] = { 0171, 0133 };
+	errs += rand_test(7, polys, 2, true, 0, false,
+			  convcode_convert, convcode_next_state);
     }
 
     printf("%u errors\n", errs);
@@ -1584,15 +1611,40 @@ output_tables(struct convcode *ce)
 {
     unsigned int i;
 
-    printf("const convcode_symsize *convcode_convert[2] = {\n");
-    for (i = 0; i < ce->num_states; i++)
-	printf("    { 0x%x, 0x%x },\n",
-	       ce->convert[0][i], ce->convert[1][i]);
-    printf("};\n");
-    printf("const state *convcode_next_state[2] = {\n");
-    for (i = 0; i < ce->num_states; i++)
-	printf("    { 0x%x, 0x%x },\n",
-	       ce->next_state[0][i], ce->next_state[1][i]);
+    printf("const convcode_symsize convcode_convert0[] = {");
+    for (i = 0; i < ce->num_states; i++) {
+	if (i % 8 == 0)
+	    printf("\n   ");
+	printf(" 0x%4.4x,", ce->convert[0][i]);
+    }
+    printf("\n};\n");
+    printf("const convcode_symsize convcode_convert1[] = {");
+    for (i = 0; i < ce->num_states; i++) {
+	if (i % 8 == 0)
+	    printf("\n   ");
+	printf(" 0x%4.4x,", ce->convert[1][i]);
+    }
+    printf("\n};\n");
+    printf("const convcode_symsize * const convcode_convert[2] = {\n");
+    printf("    convcode_convert0, convcode_convert1\n");
+    printf("};\n\n");
+
+    printf("const convcode_state convcode_next_state0[] = {");
+    for (i = 0; i < ce->num_states; i++) {
+	if (i % 8 == 0)
+	    printf("\n   ");
+	printf(" 0x%4.4x,", ce->next_state[0][i]);
+    }
+    printf("\n};\n");
+    printf("const convcode_state convcode_next_state1[] = {");
+    for (i = 0; i < ce->num_states; i++) {
+	if (i % 8 == 0)
+	    printf("\n   ");
+	printf(" 0x%4.4x,", ce->next_state[1][i]);
+    }
+    printf("\n};\n");
+    printf("const convcode_state * const convcode_next_state[2] = {\n");
+    printf("    convcode_next_state0, convcode_next_state1\n");
     printf("};\n");
 }
 
