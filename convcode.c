@@ -559,6 +559,10 @@ convencode_block(struct convcode *ce,
 static unsigned int
 num_bits_set(unsigned int v)
 {
+
+#if 1 /* Just assume we have this. */
+    return __builtin_popcount(v);
+#else /* Leave this in just in case. */
     unsigned int count = 0;
 
     while (v) {
@@ -566,6 +570,7 @@ num_bits_set(unsigned int v)
 	v >>= 1;
     }
     return count;
+#endif
 }
 
 /*
