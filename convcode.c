@@ -115,18 +115,28 @@ reverse_bits(unsigned int k, unsigned int val)
     return rv;
 }
 
-/* Is the number of set bits in the value odd?  Return 1 if true, 0 if false */
-static unsigned int
-num_bits_is_odd(unsigned int v)
+static inline unsigned int
+num_bits_set(unsigned int v)
 {
-    unsigned int rv = 0;
+
+#if 1 /* Just assume we have this. */
+    return __builtin_popcount(v);
+#else /* Leave this in just in case. */
+    unsigned int count = 0;
 
     while (v) {
-	if (v & 1)
-	    rv = !rv;
+	count += v & 1;
 	v >>= 1;
     }
-    return rv;
+    return count;
+#endif
+}
+
+/* Is the number of set bits in the value odd?  Return 1 if true, 0 if false */
+static inline unsigned int
+num_bits_is_odd(unsigned int v)
+{
+    return num_bits_set(v) % 2;
 }
 
 void
@@ -586,23 +596,6 @@ convencode_block(struct convcode *ce,
     convencode_block_final(ce, bytes, nbits, outbytes, 0);
 }
 
-static inline unsigned int
-num_bits_set(unsigned int v)
-{
-
-#if 1 /* Just assume we have this. */
-    return __builtin_popcount(v);
-#else /* Leave this in just in case. */
-    unsigned int count = 0;
-
-    while (v) {
-	count += v & 1;
-	v >>= 1;
-    }
-    return count;
-#endif
-}
-
 /*
  * This returns how far we think we are away from the actual value.
  *
@@ -937,25 +930,6 @@ convdecode_symbol_nu_nt_nr(struct convcode *ce, convcode_symsize symbol,
 			   const uint8_t *uncertainty)
 {
     return convdecode_symbol_i(ce, symbol, false, false, false, NULL);
-}
-
-/*
- * We come here with a symbol (the number of bits is the number of
- * polynomials) The uncertainty is an array of 8-bit values, one for
- * each bit, low bit first.
- */
-int
-convdecode_symbol(struct convcode *ce, convcode_symsize symbol)
-{
-    return ce->decode_symbol(ce, symbol, NULL);
-}
-
-/* Like the above, but with uncertainty passed in. */
-int
-convdecode_symbol_u(struct convcode *ce, convcode_symsize symbol,
-		    const uint8_t *uncertainty)
-{
-    return ce->decode_symbol(ce, symbol, uncertainty);
 }
 
 /*

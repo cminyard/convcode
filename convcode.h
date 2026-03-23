@@ -323,9 +323,9 @@ int convdecode_data_u(struct convcode *ce,
  *
  * Returns nonzero on an error.
  */
-int convdecode_symbol(struct convcode *ce, convcode_symsize symbol);
-int convdecode_symbol_u(struct convcode *ce, convcode_symsize symbol,
-			const uint8_t *uncertainty);
+#define convdecode_symbol(ce, symbol) ce->decode_symbol(ce, symbol, NULL)
+#define convdecode_symbol_u(ce, symbol, uncertainty)	\
+    ce->decode_symbol(ce, symbol, uncertainty)
 
 /*
  * Once all the data has been fed for decoding, you must call this to

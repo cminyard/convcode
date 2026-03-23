@@ -1,5 +1,5 @@
 
-CFLAGS = -g -Wall -O2 -DCONVCODE_TESTS
+CFLAGS = -g -Wall -O3 -DCONVCODE_TESTS
 
 all: convcode interleave
 
