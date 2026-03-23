@@ -450,7 +450,7 @@ struct convcode {
     convcode_state polys[CONVCODE_MAX_POLYNOMIALS];
     unsigned int num_polys;
 
-    bool do_tail;
+    unsigned int tail_bits; /* Number of tail bits, 0 if no tail. */
     bool recursive;
 
     /* Current state. */
@@ -482,15 +482,17 @@ struct convcode {
 
     /*
      * The bit trellis matrix.  The first array is an array of
-     * pointers to arrays of convcode_state, one for each possible output
-     * bit on decoding.  It is trellis_size elements.  Each array in
-     * that is individually allocated and contains the state for a
-     * specific input.  Each is num_states elements.
+     * pointers to arrays of convcode_state, one for each possible
+     * output bit on decoding.  It is trellis_size elements.  Each
+     * array in that is individually allocated and contains the state
+     * for a specific input.  Each of these is trelw elements wide.
+     * If trelw < num_states, the values are computed into tmptrel
+     * and then sorted into this array to get the top trelw values.
      */
     convcode_state *trellis;
-    unsigned int trellis_size;
-    unsigned int ctrellis; /* Current trellis value */
-    unsigned int trelw; /* Width of the trellises */
+    unsigned int trellis_size; /* Length of the trellis */
+    unsigned int ctrellis; /* Current trellis position */
+    unsigned int trelw; /* Width of the trellises we compute */
 
     /* Are we doing uncertainty calculations? */
     bool do_uncertainty;
