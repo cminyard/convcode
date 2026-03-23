@@ -903,17 +903,18 @@ convdecode_symbol_nu_nt(struct convcode *ce, unsigned int symbol,
     return convdecode_symbol_i(ce, symbol, false, false, NULL);
 }
 
+/*
+ * We come here with a symbol (the number of bits is the number of
+ * polynomials) The uncertainty is an array of 8-bit values, one for
+ * each bit, low bit first.
+ */
 int
 convdecode_symbol(struct convcode *ce, unsigned int symbol)
 {
     return ce->decode_symbol(ce, symbol, NULL);
 }
 
-/*
- * We come here with a symbol (the number of bits is the number of
- * polynomials) The uncertainty is an array of 8-bit values, one for
- * each bit, low bit first.
- */
+/* Like the above, but with uncertainty passed in. */
 int
 convdecode_symbol_u(struct convcode *ce, unsigned int symbol,
 		    const uint8_t *uncertainty)
@@ -1136,8 +1137,8 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 
 /*
  * Go backwards one level on the trellis, filling in the output data.
- * The compiler should optimize away the do_output checks since we
- * pass in constants there.
+ * The compiler should optimize away the do_output and
+ * do_output_uncertainty checks since we pass in constants there.
  */
 static inline unsigned int
 backwards_one_level(struct convcode *ce, const unsigned char *bytes,
@@ -1146,6 +1147,7 @@ backwards_one_level(struct convcode *ce, const unsigned char *bytes,
 		    unsigned int i, bool do_output,
 		    unsigned int *cuncertainty,
 		    unsigned char *outbytes,
+		    bool do_output_uncertainty,
 		    unsigned int *output_uncertainty)
 {
     convcode_state pstate; /* Previous state */
@@ -1225,21 +1227,41 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
     cuncertainty = min_val;
     i = ce->ctrellis;
 
-    while (extra_bits > 0 && i > 0) {
-	i--;
-	cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
-				     hamming_distance,
-				     i, false, &cuncertainty, outbytes,
-				     output_uncertainty);
-	extra_bits--;
-    }
+    /* Optimize away output_uncertainty checks. */
+    if (output_uncertainty) {
+	while (extra_bits > 0 && i > 0) {
+	    i--;
+	    cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
+					 hamming_distance,
+					 i, false, &cuncertainty, outbytes,
+					 true, output_uncertainty);
+	    extra_bits--;
+	}
 
-    while (i > 0) {
-	i--;
-	cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
-				     hamming_distance,
-				     i, true, &cuncertainty, outbytes,
-				     output_uncertainty);
+	while (i > 0) {
+	    i--;
+	    cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
+					 hamming_distance,
+					 i, true, &cuncertainty, outbytes,
+					 true, output_uncertainty);
+	}
+    } else {
+	while (extra_bits > 0 && i > 0) {
+	    i--;
+	    cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
+					 hamming_distance,
+					 i, false, &cuncertainty, outbytes,
+					 false, NULL);
+	    extra_bits--;
+	}
+
+	while (i > 0) {
+	    i--;
+	    cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
+					 hamming_distance,
+					 i, true, &cuncertainty, outbytes,
+					 false, NULL);
+	}
     }
 
     if (num_errs)
