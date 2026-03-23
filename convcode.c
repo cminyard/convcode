@@ -145,14 +145,22 @@ free_convcode(struct convcode *ce)
     o->free(o, ce);
 }
 
-static int convdecode_symbol_u_t(struct convcode *ce, convcode_symsize symbol,
-				 const uint8_t *uncertainty);
-static int convdecode_symbol_nu_t(struct convcode *ce, convcode_symsize symbol,
-				  const uint8_t *uncertainty);
-static int convdecode_symbol_u_nt(struct convcode *ce, convcode_symsize symbol,
-				  const uint8_t *uncertainty);
-static int convdecode_symbol_nu_nt(struct convcode *ce, convcode_symsize symbol,
+static int convdecode_symbol_u_t_r(struct convcode *ce, convcode_symsize symbol,
 				   const uint8_t *uncertainty);
+static int convdecode_symbol_nu_t_r(struct convcode *ce, convcode_symsize symbol,
+				    const uint8_t *uncertainty);
+static int convdecode_symbol_u_nt_r(struct convcode *ce, convcode_symsize symbol,
+				    const uint8_t *uncertainty);
+static int convdecode_symbol_nu_nt_r(struct convcode *ce, convcode_symsize symbol,
+				     const uint8_t *uncertainty);
+static int convdecode_symbol_u_t_nr(struct convcode *ce, convcode_symsize symbol,
+				    const uint8_t *uncertainty);
+static int convdecode_symbol_nu_t_nr(struct convcode *ce, convcode_symsize symbol,
+				     const uint8_t *uncertainty);
+static int convdecode_symbol_u_nt_nr(struct convcode *ce, convcode_symsize symbol,
+				     const uint8_t *uncertainty);
+static int convdecode_symbol_nu_nt_nr(struct convcode *ce, convcode_symsize symbol,
+				      const uint8_t *uncertainty);
 
 int
 setup_convcode1(struct convcode *ce, unsigned int k,
@@ -181,16 +189,30 @@ setup_convcode1(struct convcode *ce, unsigned int k,
     ce->do_uncertainty = do_uncertainty;
 
     /* Get the proper function for decoding symbols. */
-    if (ce->trelw < ce->num_states) {
-	if (ce->do_uncertainty)
-	    ce->decode_symbol = convdecode_symbol_u_t;
-	else
-	    ce->decode_symbol = convdecode_symbol_nu_t;
+    if (recursive) {
+	if (ce->trelw < ce->num_states) {
+	    if (ce->do_uncertainty)
+		ce->decode_symbol = convdecode_symbol_u_t_r;
+	    else
+		ce->decode_symbol = convdecode_symbol_nu_t_r;
+	} else {
+	    if (ce->do_uncertainty)
+		ce->decode_symbol = convdecode_symbol_u_nt_r;
+	    else
+		ce->decode_symbol = convdecode_symbol_nu_nt_r;
+	}
     } else {
-	if (ce->do_uncertainty)
-	    ce->decode_symbol = convdecode_symbol_u_nt;
-	else
-	    ce->decode_symbol = convdecode_symbol_nu_nt;
+	if (ce->trelw < ce->num_states) {
+	    if (ce->do_uncertainty)
+		ce->decode_symbol = convdecode_symbol_u_t_nr;
+	    else
+		ce->decode_symbol = convdecode_symbol_nu_t_nr;
+	} else {
+	    if (ce->do_uncertainty)
+		ce->decode_symbol = convdecode_symbol_u_nt_nr;
+	    else
+		ce->decode_symbol = convdecode_symbol_nu_nt_nr;
+	}
     }
 
     /*
@@ -611,10 +633,11 @@ hamming_distance(struct convcode *ce, convcode_symsize v1, convcode_symsize v2,
  * cstate.  For recursive mode, you have to look at pstate to see what
  * it's next state is for each bit.
  */
-static int
-get_prev_bit(struct convcode *ce, convcode_state pstate, convcode_state cstate)
+static inline int
+get_prev_bit(struct convcode *ce, bool do_recursive,
+	     convcode_state pstate, convcode_state cstate)
 {
-    if (!ce->recursive)
+    if (!do_recursive)
 	return cstate & 1;
 
     if (ce->next_state[0][pstate] == cstate)
@@ -734,7 +757,7 @@ sort_tmptrel(struct convcode *ce)
  */
 static inline int
 convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
-		    bool do_tmptrel, bool do_uncertainty,
+		    bool do_tmptrel, bool do_uncertainty, bool do_recursive,
 		    const uint8_t *uncertainty)
 {
     unsigned int *prevp = ce->prev_path_values;
@@ -765,11 +788,11 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
 	pstate2 = pstate1 | (1 << (ce->k - 2));
 
 	dist1 = prevp[pstate1];
-	bit1 = get_prev_bit(ce, pstate1, i);
+	bit1 = get_prev_bit(ce, do_recursive, pstate1, i);
 	dist1 += hamming_distance(ce, ce->convert[bit1][pstate1], symbol,
 				  do_uncertainty, uncertainty);
 	dist2 = prevp[pstate2];
-	bit2 = get_prev_bit(ce, pstate2, i);
+	bit2 = get_prev_bit(ce, do_recursive, pstate2, i);
 	dist2 += hamming_distance(ce, ce->convert[bit2][pstate2], symbol,
 				  do_uncertainty, uncertainty);
 
@@ -859,34 +882,62 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
 /*
  * Various decode symbol functions, we do this to optimize the
  * performance by having functions where checking the uncertainty and
- * the tmptrel are optimized away.
+ * the tmptrel and the do_recursive are optimized away.
  */
 static int
-convdecode_symbol_u_t(struct convcode *ce, convcode_symsize symbol,
-		      const uint8_t *uncertainty)
-{
-    return convdecode_symbol_i(ce, symbol, true, true, uncertainty);
-}
-
-static int
-convdecode_symbol_nu_t(struct convcode *ce, convcode_symsize symbol,
-		       const uint8_t *uncertainty)
-{
-    return convdecode_symbol_i(ce, symbol, true, false, NULL);
-}
-
-static int
-convdecode_symbol_u_nt(struct convcode *ce, convcode_symsize symbol,
-		       const uint8_t *uncertainty)
-{
-    return convdecode_symbol_i(ce, symbol, false, true, uncertainty);
-}
-
-static int
-convdecode_symbol_nu_nt(struct convcode *ce, convcode_symsize symbol,
+convdecode_symbol_u_t_r(struct convcode *ce, convcode_symsize symbol,
 			const uint8_t *uncertainty)
 {
-    return convdecode_symbol_i(ce, symbol, false, false, NULL);
+    return convdecode_symbol_i(ce, symbol, true, true, true, uncertainty);
+}
+
+static int
+convdecode_symbol_nu_t_r(struct convcode *ce, convcode_symsize symbol,
+			 const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, true, false, true, NULL);
+}
+
+static int
+convdecode_symbol_u_nt_r(struct convcode *ce, convcode_symsize symbol,
+			 const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, false, true, true, uncertainty);
+}
+
+static int
+convdecode_symbol_nu_nt_r(struct convcode *ce, convcode_symsize symbol,
+			  const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, false, false, true, NULL);
+}
+
+static int
+convdecode_symbol_u_t_nr(struct convcode *ce, convcode_symsize symbol,
+			 const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, true, true, false, uncertainty);
+}
+
+static int
+convdecode_symbol_nu_t_nr(struct convcode *ce, convcode_symsize symbol,
+			  const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, true, false, false, NULL);
+}
+
+static int
+convdecode_symbol_u_nt_nr(struct convcode *ce, convcode_symsize symbol,
+			  const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, false, true, false, uncertainty);
+}
+
+static int
+convdecode_symbol_nu_nt_nr(struct convcode *ce, convcode_symsize symbol,
+			   const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, false, false, false, NULL);
 }
 
 /*
@@ -1211,7 +1262,20 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
     cuncertainty = min_val;
     i = ce->ctrellis;
 
-    /* Optimize away output_uncertainty checks. */
+#if 0
+    /* This leaves in all the checks in backwards_one_level(). */
+    while (i > 0) {
+	i--;
+	cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
+				     uncertainty != NULL,
+				     i, extra_bits == 0, &cuncertainty, outbytes,
+				     output_uncertainty != NULL,
+				     output_uncertainty);
+	if (extra_bits > 0)
+	    extra_bits--;
+    }
+#else
+    /* Optimize away output_uncertainty and uncertainty checks. */
     if (output_uncertainty) {
 	if (uncertainty) {
 	    while (extra_bits > 0 && i > 0) {
@@ -1266,6 +1330,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 					 false, NULL);
 	}
     }
+#endif
 
     if (num_errs)
 	*num_errs = min_val;
