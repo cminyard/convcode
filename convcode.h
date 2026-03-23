@@ -404,20 +404,15 @@ struct convcode_outdata {
     convcode_output output;
     void *user_data;
 
+    int (*output_bits)(struct convcode *ce, struct convcode_outdata *of,
+		       unsigned int bits, unsigned int len);
+
     /*
      * Output bit processing.  Bits are collected in out_bits until we
      * get 8, then we send it to the output.
      */
     unsigned char out_bits;
     unsigned int out_bit_pos;
-
-    /*
-     * For encoding, this enables outputing the bytes in a per-symbol
-     * basis instead of a per-byte basis.  So, for instance, if
-     * num_polynomials is 3, you would get output in 3-bit chunks.
-     * For decoding this will give you the data a bit at a time.
-     */
-    bool output_symbol_size;
 
     /* Total number of output bits we have generated. */
     unsigned int total_out_bits;

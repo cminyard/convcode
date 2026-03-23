@@ -102,6 +102,9 @@ reinit_convcode(struct convcode *ce)
 			  CONVCODE_DEFAULT_INIT_VAL);
 }
 
+/*
+ * Reverse the order of the bottom "k" bits of the value.
+ */
 static unsigned int
 reverse_bits(unsigned int k, unsigned int val)
 {
@@ -183,6 +186,8 @@ static int convdecode_symbol_u_nt_nr(struct convcode *ce, convcode_symsize symbo
 				     const uint8_t *uncertainty);
 static int convdecode_symbol_nu_nt_nr(struct convcode *ce, convcode_symsize symbol,
 				      const uint8_t *uncertainty);
+static int output_bits(struct convcode *ce, struct convcode_outdata *of,
+		       unsigned int bits, unsigned int len);
 
 int
 setup_convcode1(struct convcode *ce, unsigned int k,
@@ -209,6 +214,8 @@ setup_convcode1(struct convcode *ce, unsigned int k,
     ce->recursive = recursive;
     ce->uncertainty_100 = 100;
     ce->do_uncertainty = do_uncertainty;
+    ce->enc_out.output_bits = output_bits;
+    ce->dec_out.output_bits = output_bits;
 
     /* Get the proper function for decoding symbols. */
     if (recursive) {
@@ -432,12 +439,6 @@ alloc_convcode(convcode_os_funcs *o,
 }
 
 void
-set_encode_output_per_symbol(struct convcode *ce, bool val)
-{
-    ce->enc_out.output_symbol_size = val;
-}
-
-void
 set_decode_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty)
 {
     ce->uncertainty_100 = max_uncertainty;
@@ -448,9 +449,6 @@ output_bits(struct convcode *ce, struct convcode_outdata *of,
 	    unsigned int bits, unsigned int len)
 {
     int rv = 0;
-
-    if (of->output_symbol_size)
-	return of->output(ce, of->user_data, bits, len);
 
     of->out_bits |= bits << of->out_bit_pos;
     while (of->out_bit_pos + len >= 8) {
@@ -471,13 +469,29 @@ output_bits(struct convcode *ce, struct convcode_outdata *of,
     return rv;
 }
 
+static int
+user_output_bits(struct convcode *ce, struct convcode_outdata *of,
+		 unsigned int bits, unsigned int len)
+{
+    return of->output(ce, of->user_data, bits, len);
+}
+
+void
+set_encode_output_per_symbol(struct convcode *ce, bool val)
+{
+    if (val)
+	ce->enc_out.output_bits = user_output_bits;
+    else
+	ce->enc_out.output_bits = output_bits;
+}
+
 int
 convencode_bit(struct convcode *ce, unsigned int bit)
 {
     convcode_state state = ce->enc_state;
     ce->enc_state = ce->next_state[bit][state];
-    return output_bits(ce, &ce->enc_out,
-		       ce->convert[bit][state], ce->num_polys);
+    return ce->enc_out.output_bits(ce, &ce->enc_out,
+				   ce->convert[bit][state], ce->num_polys);
 }
 
 int
@@ -1130,7 +1144,8 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 
     /* We've stored the values in index 0 of each column, play it forward. */
     for (i = 0; i < ce->ctrellis - extra_bits; i++) {
-	int rv = output_bits(ce, &ce->dec_out, get_trellis_entry(ce, i, 0), 1);
+	int rv = ce->dec_out.output_bits(ce, &ce->dec_out,
+					 get_trellis_entry(ce, i, 0), 1);
 	if (rv)
 	    return rv;
     }
