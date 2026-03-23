@@ -91,6 +91,8 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  * must, of course, match the rest of the data.  You can use the -g
  * option of convcode command.  Otherwise pass in NULL for convert and
  * next_state.
+ *
+ * Return NULL on an error.
  */
 struct convcode *alloc_convcode(convcode_os_funcs *o,
 				unsigned int k, convcode_state *polynomials,
@@ -168,6 +170,8 @@ void reinit_convencode(struct convcode *ce, unsigned int start_state);
  * For use of start_state and init_other_states, see the discussion of
  * tails above.  If you aren't doing tail biting, use the defaults
  * defined above.
+ *
+ * Returns nonzero on an error.
  */
 int reinit_convdecode(struct convcode *ce, unsigned int start_state,
 		      unsigned int init_other_states);
@@ -219,7 +223,9 @@ void set_decode_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty);
  * goes in low bit first.  The last byte does not have to be completely
  * full, and that's fine, it will only use the low nbits % 8.
  *
- * You can feed data in with multiple calls.  Returns an error
+ * You can feed data in with multiple calls.
+ *
+ * Returns nonzero on an error.
  */
 int convencode_data(struct convcode *ce,
 		    const unsigned char *bytes, unsigned int nbits);
@@ -227,7 +233,9 @@ int convencode_data(struct convcode *ce,
 /*
  * Feed a single bit into encoder.  bit must be 1 or 0.
  *
- * You can feed data in with multiple calls.  Returns an error
+ * You can feed data in with multiple calls.
+ *
+ * Returns nonzero on an error.
  */
 int convencode_bit(struct convcode *ce, unsigned int bit);
 
@@ -238,6 +246,8 @@ int convencode_bit(struct convcode *ce, unsigned int bit);
  *
  * If the output function (see above) returns an error, that error will be
  * returned here.
+ *
+ * Returns nonzero on an error.
  */
 int convencode_finish(struct convcode *ce, unsigned int *total_out_bits);
 
@@ -273,25 +283,43 @@ void convencode_block_final(struct convcode *ce,
  * goes in low bit first.  The last byte may not be completely full,
  * and that's fine, it will only use the low nbits % 8.
  *
- * If uncertainty is not NULL, this will do soft decoding.  Each array
- * entry will correspond to the uncertainty of the given bit number.  See
- * the discussion on soft decoding above the set_decode_max_uncertainty
- * function.  If it is NULL, it will do normal hard decoding.
+ * If the uncertainty version is used (ending in _u), this will do
+ * soft decoding.  Each uncertainty array entry will correspond to the
+ * uncertainty of the given bit number, low bit first.  See the
+ * discussion on soft decoding above the set_decode_max_uncertainty
+ * function.
+ *
+ * The version without uncertainty will do hard decoding.
+ *
+ * The uncertainty version is separated out to avoid having to have a
+ * check for a NULL uncertainty in the function, since this function
+ * can be called a lot.
  *
  * You can feed data in with multiple calls.
+ *
+ * Returns nonzero on an error.
  */
 int convdecode_data(struct convcode *ce,
-		    const unsigned char *bytes, unsigned int nbits,
-		    const uint8_t *uncertainty);
+		    const unsigned char *bytes, unsigned int nbits);
+int convdecode_data_u(struct convcode *ce,
+		      const unsigned char *bytes, unsigned int nbits,
+		      const uint8_t *uncertainty);
 
 /*
  * Push a single symbol into the decoder.  The symbol should have k
- * bits (the polynomial size) starting at bit zero.  uncertainty can
- * be NULL if not using it, but if supplied should be an array of k
- * uncertainty values.
+ * bits (the polynomial size) starting at bit zero.  Use the _u
+ * version for uncertainty, it should be an array of k uncertainty
+ * values.
+ *
+ * The uncertainty version is separated out to avoid having to have a
+ * check for a NULL uncertainty in the function, since this function
+ * can be called a lot.
+ *
+ * Returns nonzero on an error.
  */
-int convdecode_symbol(struct convcode *ce, unsigned int symbol,
-		      const uint8_t *uncertainty);
+int convdecode_symbol(struct convcode *ce, unsigned int symbol);
+int convdecode_symbol_u(struct convcode *ce, unsigned int symbol,
+			const uint8_t *uncertainty);
 
 /*
  * Once all the data has been fed for decoding, you must call this to
@@ -303,6 +331,8 @@ int convdecode_symbol(struct convcode *ce, unsigned int symbol,
  * If the output function (see above) returns an error, that error
  * will be returned here.  This will also return 1 if the data exceeds
  * the available size given in max_decode_len_bits above.
+ *
+ * Returns nonzero on an error.
  */
 int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 		      unsigned int *num_errs);
@@ -342,6 +372,8 @@ int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  * output_uncertainty will not be correct.  The previous state data is
  * lost because paths are discarding, and keeping that data around
  * would use a lot of memory.
+ *
+ * Returns nonzero on an error.
  */
 int convdecode_block(struct convcode *ce, const unsigned char *bytes,
 		     unsigned int nbits, const uint8_t *uncertainty,

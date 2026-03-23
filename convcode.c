@@ -545,22 +545,34 @@ num_bits_set(unsigned int v)
     return count;
 }
 
+typedef unsigned int
+(*hamming_distance_f)(struct convcode *ce, unsigned int v1, unsigned int v2,
+		      const uint8_t *uncertainty);
+
 /*
  * This returns how far we think we are away from the actual value.
  * When not using uncertainties, this is the mumber of bits that are
- * different between v1 and v2.  When using uncertainties, if the bits
- * are the same we use the uncertainty of the bits being correct.  If
- * the bits are different, we use the uncertainty of the bits being
- * different (which is 100% - uncertainty).
+ * different between v1 and v2.
  */
 static unsigned int
-hamming_distance(struct convcode *ce, unsigned int v1, unsigned int v2,
-		 const uint8_t *uncertainty)
+hamming_distance_nu(struct convcode *ce, unsigned int v1, unsigned int v2,
+		    const uint8_t *uncertainty)
+{
+    return num_bits_set(v1 ^ v2);
+}
+
+/*
+ * This returns how far we think we are away from the actual value.
+ * When using uncertainties, if the bits are the same we use the
+ * uncertainty of the bits being correct.  If the bits are different,
+ * we use the uncertainty of the bits being different (which is 100% -
+ * uncertainty).
+ */
+static unsigned int
+hamming_distance_u(struct convcode *ce, unsigned int v1, unsigned int v2,
+		   const uint8_t *uncertainty)
 {
     unsigned int i, rv = 0;
-
-    if (!uncertainty)
-	return num_bits_set(v1 ^ v2);
 
     for (i = 0; i < ce->num_polys; i++) {
 	if ((v1 & 1) == (v2 & 1)) {
@@ -699,11 +711,13 @@ sort_tmptrel(struct convcode *ce)
 /*
  * We come here with a symbol (the number of bits is the number of
  * polynomials) The uncertainty is an array of 8-bit values, one for
- * each bit, low bit first.
+ * each bit, low bit first.  It may be unused if hamming_distance()
+ * doesn't use it.
  */
-int
-convdecode_symbol(struct convcode *ce, unsigned int symbol,
-		  const uint8_t *uncertainty)
+static int
+convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
+		    hamming_distance_f hamming_distance,
+		    const uint8_t *uncertainty)
 {
     unsigned int *prevp = ce->prev_path_values;
     unsigned int *currp = ce->curr_path_values;
@@ -734,12 +748,12 @@ convdecode_symbol(struct convcode *ce, unsigned int symbol,
 
 	dist1 = prevp[pstate1];
 	bit1 = get_prev_bit(ce, pstate1, i);
-	dist1 += hamming_distance(ce, ce->convert[bit1][pstate1],
-				  symbol, uncertainty);
+	dist1 += hamming_distance(ce, ce->convert[bit1][pstate1], symbol,
+				  uncertainty);
 	dist2 = prevp[pstate2];
 	bit2 = get_prev_bit(ce, pstate2, i);
-	dist2 += hamming_distance(ce, ce->convert[bit2][pstate2],
-				  symbol, uncertainty);
+	dist2 += hamming_distance(ce, ce->convert[bit2][pstate2], symbol,
+				  uncertainty);
 
 	if (dist2 < dist1) {
 	    trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
@@ -824,6 +838,24 @@ convdecode_symbol(struct convcode *ce, unsigned int symbol,
     return 0;
 }
 
+int
+convdecode_symbol(struct convcode *ce, unsigned int symbol)
+{
+    return convdecode_symbol_i(ce, symbol, hamming_distance_nu, NULL);
+}
+
+/*
+ * We come here with a symbol (the number of bits is the number of
+ * polynomials) The uncertainty is an array of 8-bit values, one for
+ * each bit, low bit first.
+ */
+int
+convdecode_symbol_u(struct convcode *ce, unsigned int symbol,
+		    const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, hamming_distance_u, uncertainty);
+}
+
 /*
  * Extract nbits bits from bytes at offset curr.
  */
@@ -854,8 +886,54 @@ extract_bits(const unsigned char *bytes, unsigned int curr, unsigned int nbits)
 
 int
 convdecode_data(struct convcode *ce,
-		const unsigned char *bytes, unsigned int nbits,
-		const uint8_t *uncertainty)
+		const unsigned char *bytes, unsigned int nbits)
+{
+    unsigned int curr_bit = 0;
+    int rv;
+
+    if (ce->leftover_bits) {
+	unsigned int newbits, extract_size;
+
+	if (nbits + ce->leftover_bits < ce->num_polys) {
+	    /* Not enough bits for a full symbol, just store these. */
+	    ce->leftover_bits_data |= bytes[0] << ce->leftover_bits;
+	    ce->leftover_bits += nbits;
+	    ce->leftover_bits_data &= (1 << ce->leftover_bits) - 1;
+	    return 0;
+	}
+	/* We got enough bits for a full symbol, process it. */
+	extract_size = ce->num_polys - ce->leftover_bits;
+	newbits = extract_bits(bytes, curr_bit, extract_size);
+	curr_bit += extract_size;
+	nbits -= extract_size;
+	ce->leftover_bits_data |= newbits << ce->leftover_bits;
+	rv = convdecode_symbol(ce, ce->leftover_bits_data);
+	if (rv)
+	    return rv;
+	ce->leftover_bits = 0;
+    }
+
+    while (nbits >= ce->num_polys) {
+	unsigned int bits = extract_bits(bytes, curr_bit, ce->num_polys);
+
+	rv = convdecode_symbol(ce, bits);
+	if (rv)
+	    return rv;
+	curr_bit += ce->num_polys;
+	nbits -= ce->num_polys;
+    }
+    ce->leftover_bits = nbits;
+    if (nbits) {
+	ce->leftover_bits_data = bytes[curr_bit / 8] >> (curr_bit % 8);
+	ce->leftover_bits_data &= (1 << nbits) - 1;
+    }
+    return 0;
+}
+
+int
+convdecode_data_u(struct convcode *ce,
+		  const unsigned char *bytes, unsigned int nbits,
+		  const uint8_t *uncertainty)
 {
     unsigned int curr_bit = 0, i;
     int rv;
@@ -866,13 +944,9 @@ convdecode_data(struct convcode *ce,
 	if (nbits + ce->leftover_bits < ce->num_polys) {
 	    /* Not enough bits for a full symbol, just store these. */
 	    ce->leftover_bits_data |= bytes[0] << ce->leftover_bits;
-	    if (uncertainty) {
-		for (i = 0; i < nbits; i++)
-		    ce->leftover_uncertainty[ce->leftover_bits++] =
-			uncertainty[i];
-	    } else {
-		ce->leftover_bits += nbits;
-	    }
+	    for (i = 0; i < nbits; i++)
+		ce->leftover_uncertainty[ce->leftover_bits++] =
+		    uncertainty[i];
 	    ce->leftover_bits_data &= (1 << ce->leftover_bits) - 1;
 	    return 0;
 	}
@@ -882,24 +956,19 @@ convdecode_data(struct convcode *ce,
 	curr_bit += extract_size;
 	nbits -= extract_size;
 	ce->leftover_bits_data |= newbits << ce->leftover_bits;
-	if (uncertainty) {
-	    for (i = 0; i < extract_size; i++)
-		ce->leftover_uncertainty[ce->leftover_bits++] = uncertainty[i];
-	    rv = convdecode_symbol(ce, ce->leftover_bits_data,
-				   ce->leftover_uncertainty);
-	} else {
-	    rv = convdecode_symbol(ce, ce->leftover_bits_data, NULL);
-	}
+	for (i = 0; i < extract_size; i++)
+	    ce->leftover_uncertainty[ce->leftover_bits++] = uncertainty[i];
+	rv = convdecode_symbol_u(ce, ce->leftover_bits_data,
+				 ce->leftover_uncertainty);
+	if (rv)
+	    return rv;
 	ce->leftover_bits = 0;
     }
 
     while (nbits >= ce->num_polys) {
 	unsigned int bits = extract_bits(bytes, curr_bit, ce->num_polys);
 
-	if (uncertainty)
-	    rv = convdecode_symbol(ce, bits, uncertainty + curr_bit);
-	else
-	    rv = convdecode_symbol(ce, bits, NULL);
+	rv = convdecode_symbol_u(ce, bits, uncertainty + curr_bit);
 	if (rv)
 	    return rv;
 	curr_bit += ce->num_polys;
@@ -909,10 +978,8 @@ convdecode_data(struct convcode *ce,
     if (nbits) {
 	ce->leftover_bits_data = bytes[curr_bit / 8] >> (curr_bit % 8);
 	ce->leftover_bits_data &= (1 << nbits) - 1;
-	if (uncertainty) {
-	    for (i = 0; i < ce->leftover_bits; i++)
-		ce->leftover_uncertainty[i] = uncertainty[curr_bit++];
-	}
+	for (i = 0; i < ce->leftover_bits; i++)
+	    ce->leftover_uncertainty[i] = uncertainty[curr_bit++];
     }
     return 0;
 }
@@ -976,6 +1043,53 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
     return 0;
 }
 
+/*
+ * Go backwards one level on the trellis, filling in the output data.
+ * The compiler should optimize away the do_output checks since we
+ * pass in constants there.
+ */
+static inline unsigned int
+backwards_one_level(struct convcode *ce, const unsigned char *bytes,
+		    const uint8_t *uncertainty, unsigned int cstate,
+		    hamming_distance_f hamming_distance,
+		    unsigned int i, bool do_output,
+		    unsigned int *cuncertainty,
+		    unsigned char *outbytes,
+		    unsigned int *output_uncertainty)
+{
+    convcode_state pstate; /* Previous state */
+    unsigned int bit, bits, inpos;
+
+    pstate = get_trellis_entry(ce, i, cstate);
+    bit = CONVCODE_PSTATE_BIT(pstate);
+    pstate = CONVCODE_PSTATE_VAL(pstate);
+#if CONVCODE_DEBUG_STATES
+    assert(pstate < ce->trelw);
+#endif
+
+    /*
+     * Store the bit values in the user-supplied data.
+     */
+    if (do_output)
+	outbytes[i / 8] |= bit << (i % 8);
+
+    if (output_uncertainty) {
+	if (do_output)
+	    output_uncertainty[i] = *cuncertainty;
+
+	/*
+	 * Subtract off the distance we had computed to here to get the
+	 * previous uncertainty value.
+	 */
+	inpos = i * ce->num_polys;
+	bits = extract_bits(bytes, inpos, ce->num_polys);
+	*cuncertainty -= hamming_distance(ce, ce->convert[bit][pstate],
+					  bits, uncertainty + inpos);
+    }
+
+    return pstate;
+}
+
 int
 convdecode_block(struct convcode *ce, const unsigned char *bytes,
 		 unsigned int nbits, const uint8_t *uncertainty,
@@ -983,11 +1097,20 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 		 unsigned int *output_uncertainty,
 		 unsigned int *num_errs)
 {
+    int rv;
     unsigned int i, extra_bits = 0;
     unsigned int min_val, cuncertainty, cstate;
+    hamming_distance_f hamming_distance;
 
-    if (convdecode_data(ce, bytes, nbits, uncertainty))
-	return 1;
+    if (uncertainty) {
+	hamming_distance = hamming_distance_u;
+	rv = convdecode_data_u(ce, bytes, nbits, uncertainty);
+    } else {
+	hamming_distance = hamming_distance_nu;
+	rv = convdecode_data(ce, bytes, nbits);
+    }
+    if (rv)
+	return rv;
 
     /* Find the minimum value in the final path. */
     if (ce->trelmap) {
@@ -1009,44 +1132,23 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
     if (ce->do_tail)
 	extra_bits = ce->k - 1;
     cuncertainty = min_val;
-    for (i = ce->ctrellis; i > 0; ) {
-	convcode_state pstate; /* Previous state */
-	unsigned int bit, bits, inpos;
-	const uint8_t *u = NULL;
+    i = ce->ctrellis;
 
+    while (extra_bits > 0 && i > 0) {
 	i--;
-	pstate = get_trellis_entry(ce, i, cstate);
-	bit = CONVCODE_PSTATE_BIT(pstate);
-	pstate = CONVCODE_PSTATE_VAL(pstate);
-#if CONVCODE_DEBUG_STATES
-	assert(pstate < ce->trelw);
-#endif
+	cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
+				     hamming_distance,
+				     i, false, &cuncertainty, outbytes,
+				     output_uncertainty);
+	extra_bits--;
+    }
 
-	/*
-	 * Store the bit values in the user-supplied data.
-	 */
-	if (extra_bits == 0)
-	    outbytes[i / 8] |= bit << (i % 8);
-
-	if (output_uncertainty) {
-	    if (extra_bits == 0)
-		output_uncertainty[i] = cuncertainty;
-
-	    /*
-	     * Subtract off the distance we had computed to here to get the
-	     * previous uncertainty value.
-	     */
-	    inpos = i * ce->num_polys;
-	    bits = extract_bits(bytes, inpos, ce->num_polys);
-	    if (uncertainty)
-		u = uncertainty + inpos;
-	    cuncertainty -= hamming_distance(ce, ce->convert[bit][pstate],
-					     bits, u);
-	}
-	if (extra_bits > 0)
-	    extra_bits--;
-
-	cstate = pstate;
+    while (i > 0) {
+	i--;
+	cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
+				     hamming_distance,
+				     i, true, &cuncertainty, outbytes,
+				     output_uncertainty);
     }
 
     if (num_errs)
@@ -1143,6 +1245,16 @@ do_encode_data(struct convcode *ce, const char *input, unsigned int *total_bits)
 }
 
 static void
+do_decode_one_data(struct convcode *ce, unsigned char *bytes,
+		   unsigned int nbits, uint8_t *uncertainty)
+{
+    if (uncertainty)
+	convdecode_data_u(ce, bytes, nbits, uncertainty);
+    else
+	convdecode_data(ce, bytes, nbits);
+}
+
+static void
 do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
 	       unsigned int *num_errs, uint8_t *uncertainty)
 {
@@ -1154,7 +1266,7 @@ do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
 	    byte |= 1 << nbits;
 	nbits++;
 	if (nbits == 8) {
-	    convdecode_data(ce, &byte, 8, uncertainty);
+	    do_decode_one_data(ce, &byte, 8, uncertainty);
 	    nbits = 0;
 	    byte = 0;
 	    if (uncertainty)
@@ -1162,7 +1274,7 @@ do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
 	}
     }
     if (nbits > 0)
-	convdecode_data(ce, &byte, nbits, uncertainty);
+	do_decode_one_data(ce, &byte, nbits, uncertainty);
     convdecode_finish(ce, total_bits, num_errs);
 }
 
