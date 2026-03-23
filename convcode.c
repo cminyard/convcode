@@ -145,13 +145,13 @@ free_convcode(struct convcode *ce)
     o->free(o, ce);
 }
 
-static int convdecode_symbol_u_t(struct convcode *ce, unsigned int symbol,
+static int convdecode_symbol_u_t(struct convcode *ce, convcode_symsize symbol,
 				 const uint8_t *uncertainty);
-static int convdecode_symbol_nu_t(struct convcode *ce, unsigned int symbol,
+static int convdecode_symbol_nu_t(struct convcode *ce, convcode_symsize symbol,
 				  const uint8_t *uncertainty);
-static int convdecode_symbol_u_nt(struct convcode *ce, unsigned int symbol,
+static int convdecode_symbol_u_nt(struct convcode *ce, convcode_symsize symbol,
 				  const uint8_t *uncertainty);
-static int convdecode_symbol_nu_nt(struct convcode *ce, unsigned int symbol,
+static int convdecode_symbol_nu_nt(struct convcode *ce, convcode_symsize symbol,
 				   const uint8_t *uncertainty);
 
 int
@@ -556,7 +556,7 @@ convencode_block(struct convcode *ce,
     convencode_block_final(ce, bytes, nbits, outbytes, 0);
 }
 
-static unsigned int
+static inline unsigned int
 num_bits_set(unsigned int v)
 {
 
@@ -585,7 +585,7 @@ num_bits_set(unsigned int v)
  * uncertainty).
  */
 static inline unsigned int
-hamming_distance(struct convcode *ce, unsigned int v1, unsigned int v2,
+hamming_distance(struct convcode *ce, convcode_symsize v1, convcode_symsize v2,
 		 bool do_uncertainty, const uint8_t *uncertainty)
 {
     unsigned int i, rv = 0;
@@ -733,7 +733,7 @@ sort_tmptrel(struct convcode *ce)
  * each bit, low bit first.
  */
 static inline int
-convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
+convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
 		    bool do_tmptrel, bool do_uncertainty,
 		    const uint8_t *uncertainty)
 {
@@ -862,28 +862,28 @@ convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
  * the tmptrel are optimized away.
  */
 static int
-convdecode_symbol_u_t(struct convcode *ce, unsigned int symbol,
+convdecode_symbol_u_t(struct convcode *ce, convcode_symsize symbol,
 		      const uint8_t *uncertainty)
 {
     return convdecode_symbol_i(ce, symbol, true, true, uncertainty);
 }
 
 static int
-convdecode_symbol_nu_t(struct convcode *ce, unsigned int symbol,
+convdecode_symbol_nu_t(struct convcode *ce, convcode_symsize symbol,
 		       const uint8_t *uncertainty)
 {
     return convdecode_symbol_i(ce, symbol, true, false, NULL);
 }
 
 static int
-convdecode_symbol_u_nt(struct convcode *ce, unsigned int symbol,
+convdecode_symbol_u_nt(struct convcode *ce, convcode_symsize symbol,
 		       const uint8_t *uncertainty)
 {
     return convdecode_symbol_i(ce, symbol, false, true, uncertainty);
 }
 
 static int
-convdecode_symbol_nu_nt(struct convcode *ce, unsigned int symbol,
+convdecode_symbol_nu_nt(struct convcode *ce, convcode_symsize symbol,
 			const uint8_t *uncertainty)
 {
     return convdecode_symbol_i(ce, symbol, false, false, NULL);
@@ -895,14 +895,14 @@ convdecode_symbol_nu_nt(struct convcode *ce, unsigned int symbol,
  * each bit, low bit first.
  */
 int
-convdecode_symbol(struct convcode *ce, unsigned int symbol)
+convdecode_symbol(struct convcode *ce, convcode_symsize symbol)
 {
     return ce->decode_symbol(ce, symbol, NULL);
 }
 
 /* Like the above, but with uncertainty passed in. */
 int
-convdecode_symbol_u(struct convcode *ce, unsigned int symbol,
+convdecode_symbol_u(struct convcode *ce, convcode_symsize symbol,
 		    const uint8_t *uncertainty)
 {
     return ce->decode_symbol(ce, symbol, uncertainty);
@@ -952,7 +952,8 @@ process_old_leftover_bits(struct convcode *ce,
 			  bool do_uncertainty,
 			  const uint8_t *uncertainty)
 {
-    unsigned int newbits, extract_size, i;
+    convcode_symsize newbits;
+    unsigned int extract_size, i;
 
     if (*nbits + ce->leftover_bits < ce->num_polys) {
 	/* Not enough bits for a full symbol, just store these. */

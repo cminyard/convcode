@@ -323,8 +323,8 @@ int convdecode_data_u(struct convcode *ce,
  *
  * Returns nonzero on an error.
  */
-int convdecode_symbol(struct convcode *ce, unsigned int symbol);
-int convdecode_symbol_u(struct convcode *ce, unsigned int symbol,
+int convdecode_symbol(struct convcode *ce, convcode_symsize symbol);
+int convdecode_symbol_u(struct convcode *ce, convcode_symsize symbol,
 			const uint8_t *uncertainty);
 
 /*
@@ -525,7 +525,7 @@ struct convcode {
      * for partial trellis or uncertainty.  It's set based up on data
      * at allocation.
      */
-    int (*decode_symbol)(struct convcode *ce, unsigned int symbol,
+    int (*decode_symbol)(struct convcode *ce, convcode_symsize symbol,
 			 const uint8_t *uncertainty);
 
     /*
@@ -540,7 +540,7 @@ struct convcode {
      * there weren't enough bits for the whole operation.  Store those
      * here for use in the next decode call.
      */
-    unsigned int leftover_bits;
+    convcode_symsize leftover_bits;
     convcode_state leftover_bits_data;
     uint8_t leftover_uncertainty[CONVCODE_MAX_POLYNOMIALS];
 
