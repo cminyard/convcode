@@ -67,6 +67,11 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
  * be kept and the rest of the paths discarded.  This can result in
  * poor performance, but can save a lot of data.
  *
+ * If you are doing uncertainty, you must pass in true to the
+ * do_uncertainty parameter, and you must use the uncertainty
+ * functions and pass in the value.  Otherwise don't use uncertainty
+ * functions and use NULL uncertainty to any function that takes it.
+ *
  * See the discussion below on tails for what do_tail does.
  *
  * The recursive setting enables a recursive decoder.  The first
@@ -100,6 +105,7 @@ struct convcode *alloc_convcode(convcode_os_funcs *o,
 				unsigned int max_decode_len_bits,
 				unsigned int trellis_width,
 				bool do_tail, bool recursive,
+				bool do_uncertainty,
 				convcode_output enc_output,
 				void *enc_out_user_data,
 				convcode_output dec_output,
@@ -486,12 +492,15 @@ struct convcode {
     unsigned int ctrellis; /* Current trellis value */
     unsigned int trelw; /* Width of the trellises */
 
+    /* Are we doing uncertainty calculations? */
+    bool do_uncertainty;
+
     /*
      * A temporary trellis entry, only set/used if trelw < num_states.
      * We calculate the full set of state values into this and then
      * compress it into the trellis.  Also a map that is used for
-     * sorting, after the sort tmptrelmap will index into tmptrel
-     * sorted.
+     * sorting, after the sort tmptrelmap will index into the sorted
+     * tmptrel.
      */
     convcode_state *tmptrel;
     convcode_state *tmptrelmap;
@@ -510,6 +519,14 @@ struct convcode {
      */
     unsigned int *prev_path_values;
     unsigned int *curr_path_values;
+
+    /*
+     * Symbol decoding function, set here to remove a lot of checks
+     * for partial trellis or uncertainty.  It's set based up on data
+     * at allocation.
+     */
+    int (*decode_symbol)(struct convcode *ce, unsigned int symbol,
+			 const uint8_t *uncertainty);
 
     /*
      * The uncertainty that maps to 100% uncertain for soft decoding.
@@ -564,7 +581,7 @@ int setup_convcode1(struct convcode *ce, unsigned int k,
 		    convcode_state *polynomials, unsigned int num_polynomials,
 		    unsigned int max_decode_len_bits,
 		    unsigned int trellis_width,
-		    bool do_tail, bool recursive);
+		    bool do_tail, bool recursive, bool do_uncertainty);
 
 /* See the above discussion for how to use this. */
 void setup_convcode2(struct convcode *ce);

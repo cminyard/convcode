@@ -145,12 +145,21 @@ free_convcode(struct convcode *ce)
     o->free(o, ce);
 }
 
+static int convdecode_symbol_u_t(struct convcode *ce, unsigned int symbol,
+				 const uint8_t *uncertainty);
+static int convdecode_symbol_nu_t(struct convcode *ce, unsigned int symbol,
+				  const uint8_t *uncertainty);
+static int convdecode_symbol_u_nt(struct convcode *ce, unsigned int symbol,
+				  const uint8_t *uncertainty);
+static int convdecode_symbol_nu_nt(struct convcode *ce, unsigned int symbol,
+				   const uint8_t *uncertainty);
+
 int
 setup_convcode1(struct convcode *ce, unsigned int k,
 		convcode_state *polynomials, unsigned int num_polynomials,
 		unsigned int max_decode_len_bits,
 		unsigned int trellis_width,
-		bool do_tail, bool recursive)
+		bool do_tail, bool recursive, bool do_uncertainty)
 {
     unsigned int i;
 
@@ -169,6 +178,20 @@ setup_convcode1(struct convcode *ce, unsigned int k,
     ce->do_tail = do_tail;
     ce->recursive = recursive;
     ce->uncertainty_100 = 100;
+    ce->do_uncertainty = do_uncertainty;
+
+    /* Get the proper function for decoding symbols. */
+    if (ce->trelw < ce->num_states) {
+	if (ce->do_uncertainty)
+	    ce->decode_symbol = convdecode_symbol_u_t;
+	else
+	    ce->decode_symbol = convdecode_symbol_nu_t;
+    } else {
+	if (ce->do_uncertainty)
+	    ce->decode_symbol = convdecode_symbol_u_nt;
+	else
+	    ce->decode_symbol = convdecode_symbol_nu_nt;
+    }
 
     /*
      * Polynomials come in as the first bit being the high bit.  We
@@ -272,7 +295,7 @@ alloc_convcode(convcode_os_funcs *o,
 	       unsigned int num_polynomials,
 	       unsigned int max_decode_len_bits,
 	       unsigned int trellis_width,
-	       bool do_tail, bool recursive,
+	       bool do_tail, bool recursive, bool do_uncertainty,
 	       convcode_output enc_output, void *enc_out_user_data,
 	       convcode_output dec_output, void *dec_out_user_data,
 	       const convcode_symsize * const *convert,
@@ -289,7 +312,7 @@ alloc_convcode(convcode_os_funcs *o,
 	return NULL;
     if (setup_convcode1(ce, k, polynomials, num_polynomials,
 			max_decode_len_bits, trellis_width, do_tail,
-			recursive)) {
+			recursive, do_uncertainty)) {
 	o->free(o, ce);
 	return NULL;
     }
@@ -716,7 +739,7 @@ sort_tmptrel(struct convcode *ce)
  */
 static inline int
 convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
-		    hamming_distance_f hamming_distance,
+		    bool do_tmptrel, bool do_uncertainty,
 		    const uint8_t *uncertainty)
 {
     unsigned int *prevp = ce->prev_path_values;
@@ -728,7 +751,7 @@ convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
     assert(ce->ctrellis + ce->num_polys < ce->trellis_size);
 #endif
 
-    if (ce->tmptrel)
+    if (do_tmptrel)
 	trel = ce->tmptrel;
     else
 	trel = get_trellis_column(ce, ce->ctrellis);
@@ -748,12 +771,21 @@ convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
 
 	dist1 = prevp[pstate1];
 	bit1 = get_prev_bit(ce, pstate1, i);
-	dist1 += hamming_distance(ce, ce->convert[bit1][pstate1], symbol,
-				  uncertainty);
+	if (do_uncertainty)
+	    dist1 += hamming_distance_u(ce, ce->convert[bit1][pstate1], symbol,
+					uncertainty);
+	else
+	    dist1 += hamming_distance_nu(ce, ce->convert[bit1][pstate1], symbol,
+					 NULL);
 	dist2 = prevp[pstate2];
 	bit2 = get_prev_bit(ce, pstate2, i);
-	dist2 += hamming_distance(ce, ce->convert[bit2][pstate2], symbol,
-				  uncertainty);
+	if (do_uncertainty)
+	    dist2 += hamming_distance_u(ce, ce->convert[bit2][pstate2], symbol,
+				      uncertainty);
+	else
+	    dist2 += hamming_distance_nu(ce, ce->convert[bit2][pstate2], symbol,
+					 NULL);
+
 
 	if (dist2 < dist1) {
 	    trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
@@ -775,7 +807,7 @@ convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
     printf("\n");
 #endif
 
-    if (ce->tmptrel) {
+    if (do_tmptrel) {
 	convcode_state *ntrel = get_trellis_column(ce, ce->ctrellis);
 
 	for (i = 0; i < ce->num_states; i++)
@@ -838,10 +870,43 @@ convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
     return 0;
 }
 
+/*
+ * Various decode symbol functions, we do this to optimize the
+ * performance by having functions where checking the uncertainty and
+ * the tmptrel are optimized away.
+ */
+static int
+convdecode_symbol_u_t(struct convcode *ce, unsigned int symbol,
+		      const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, true, true, uncertainty);
+}
+
+static int
+convdecode_symbol_nu_t(struct convcode *ce, unsigned int symbol,
+		       const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, true, false, NULL);
+}
+
+static int
+convdecode_symbol_u_nt(struct convcode *ce, unsigned int symbol,
+		       const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, false, true, uncertainty);
+}
+
+static int
+convdecode_symbol_nu_nt(struct convcode *ce, unsigned int symbol,
+			const uint8_t *uncertainty)
+{
+    return convdecode_symbol_i(ce, symbol, false, false, NULL);
+}
+
 int
 convdecode_symbol(struct convcode *ce, unsigned int symbol)
 {
-    return convdecode_symbol_i(ce, symbol, hamming_distance_nu, NULL);
+    return ce->decode_symbol(ce, symbol, NULL);
 }
 
 /*
@@ -853,7 +918,7 @@ int
 convdecode_symbol_u(struct convcode *ce, unsigned int symbol,
 		    const uint8_t *uncertainty)
 {
-    return convdecode_symbol_i(ce, symbol, hamming_distance_u, uncertainty);
+    return ce->decode_symbol(ce, symbol, uncertainty);
 }
 
 /*
@@ -1345,7 +1410,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     len = strlen(decoded);
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
-			do_tail, false,
+			do_tail, false, uncertainty != NULL,
 			handle_test_output, &t,
 			handle_test_output, &t, NULL, NULL);
     printf("Test k=%u %s err=%u polys={ 0%o", k, do_tail ? "tail" : "notail",
@@ -1520,7 +1585,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     len = 32;
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
-			do_tail, recursive,
+			do_tail, recursive, false,
 			handle_test_output, &t,
 			handle_test_output, &t, convert, next_state);
     if (recursive)
@@ -1881,7 +1946,7 @@ main(int argc, char *argv[])
     }
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, num_polys, len, trellis_width,
-			do_tail, recursive,
+			do_tail, recursive, false,
 			handle_output, NULL,
 			handle_output, NULL, NULL, NULL);
     if (start_state)
