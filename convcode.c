@@ -714,7 +714,7 @@ sort_tmptrel(struct convcode *ce)
  * each bit, low bit first.  It may be unused if hamming_distance()
  * doesn't use it.
  */
-static int
+static inline int
 convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
 		    hamming_distance_f hamming_distance,
 		    const uint8_t *uncertainty)
@@ -890,13 +890,14 @@ extract_bits(const unsigned char *bytes, unsigned int curr, unsigned int nbits)
  * adds the new bits and returns.  Otherwise this takes the old bits
  * and sets up for processing the next symbol.
  *
- * The uncertainty check should optimize away if not needed.
+ * The uncertainty check should optimize away.
  */
 static inline bool
 process_old_leftover_bits(struct convcode *ce,
 			  const unsigned char *bytes,
 			  unsigned int *nbits,
 			  unsigned int *curr_bit,
+			  bool do_uncertainty,
 			  const uint8_t *uncertainty)
 {
     unsigned int newbits, extract_size, i;
@@ -914,7 +915,7 @@ process_old_leftover_bits(struct convcode *ce,
     *curr_bit += extract_size;
     *nbits -= extract_size;
     ce->leftover_bits_data |= newbits << ce->leftover_bits;
-    if (uncertainty) {
+    if (do_uncertainty) {
 	for (i = 0; i < extract_size; i++)
 	    ce->leftover_uncertainty[ce->leftover_bits++] = uncertainty[i];
     }
@@ -925,12 +926,14 @@ process_old_leftover_bits(struct convcode *ce,
  * Handle leftover bits after processing a set of symbols.  This will
  * store any leftover bits for processing later.
  *
- * The uncertainty check should optimize away if not needed.
+ * The uncertainty check should optimize away.
  */
 static inline void
 handle_new_leftover_bits(struct convcode *ce,
 			 const unsigned char *bytes, unsigned int nbits,
-			 unsigned int curr_bit, const uint8_t *uncertainty)
+			 unsigned int curr_bit,
+			 bool do_uncertainty,
+			 const uint8_t *uncertainty)
 {
     unsigned int i;
 
@@ -938,7 +941,7 @@ handle_new_leftover_bits(struct convcode *ce,
     if (nbits) {
 	ce->leftover_bits_data = bytes[curr_bit / 8] >> (curr_bit % 8);
 	ce->leftover_bits_data &= (1 << nbits) - 1;
-	if (uncertainty) {
+	if (do_uncertainty) {
 	    for (i = 0; i < ce->leftover_bits; i++)
 		ce->leftover_uncertainty[i] = uncertainty[curr_bit++];
 	}
@@ -953,7 +956,8 @@ convdecode_data(struct convcode *ce,
     int rv;
 
     if (ce->leftover_bits) {
-	if (!process_old_leftover_bits(ce, bytes, &nbits, &curr_bit, NULL))
+	if (!process_old_leftover_bits(ce, bytes, &nbits, &curr_bit,
+				       false, NULL))
 	    return 0;
 	rv = convdecode_symbol(ce, ce->leftover_bits_data);
 	if (rv)
@@ -970,7 +974,7 @@ convdecode_data(struct convcode *ce,
 	curr_bit += ce->num_polys;
 	nbits -= ce->num_polys;
     }
-    handle_new_leftover_bits(ce, bytes, nbits, curr_bit, NULL);
+    handle_new_leftover_bits(ce, bytes, nbits, curr_bit, false, NULL);
     return 0;
 }
 
@@ -984,7 +988,7 @@ convdecode_data_u(struct convcode *ce,
 
     if (ce->leftover_bits) {
 	if (!process_old_leftover_bits(ce, bytes, &nbits, &curr_bit,
-				       uncertainty))
+				       true, uncertainty))
 	    return 0;
 	rv = convdecode_symbol_u(ce, ce->leftover_bits_data,
 				 ce->leftover_uncertainty);
@@ -1002,7 +1006,7 @@ convdecode_data_u(struct convcode *ce,
 	curr_bit += ce->num_polys;
 	nbits -= ce->num_polys;
     }
-    handle_new_leftover_bits(ce, bytes, nbits, curr_bit, uncertainty);
+    handle_new_leftover_bits(ce, bytes, nbits, curr_bit, true, uncertainty);
     return 0;
 }
 
