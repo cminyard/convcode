@@ -568,34 +568,25 @@ num_bits_set(unsigned int v)
     return count;
 }
 
-typedef unsigned int
-(*hamming_distance_f)(struct convcode *ce, unsigned int v1, unsigned int v2,
-		      const uint8_t *uncertainty);
-
 /*
  * This returns how far we think we are away from the actual value.
- * When not using uncertainties, this is the mumber of bits that are
+ *
+ * When not using uncertainties, this is the number of bits that are
  * different between v1 and v2.
- */
-static unsigned int
-hamming_distance_nu(struct convcode *ce, unsigned int v1, unsigned int v2,
-		    const uint8_t *uncertainty)
-{
-    return num_bits_set(v1 ^ v2);
-}
-
-/*
- * This returns how far we think we are away from the actual value.
+ *
  * When using uncertainties, if the bits are the same we use the
  * uncertainty of the bits being correct.  If the bits are different,
  * we use the uncertainty of the bits being different (which is 100% -
  * uncertainty).
  */
-static unsigned int
-hamming_distance_u(struct convcode *ce, unsigned int v1, unsigned int v2,
-		   const uint8_t *uncertainty)
+static inline unsigned int
+hamming_distance(struct convcode *ce, unsigned int v1, unsigned int v2,
+		 bool do_uncertainty, const uint8_t *uncertainty)
 {
     unsigned int i, rv = 0;
+
+    if (!do_uncertainty)
+	return num_bits_set(v1 ^ v2);
 
     for (i = 0; i < ce->num_polys; i++) {
 	if ((v1 & 1) == (v2 & 1)) {
@@ -734,8 +725,7 @@ sort_tmptrel(struct convcode *ce)
 /*
  * We come here with a symbol (the number of bits is the number of
  * polynomials) The uncertainty is an array of 8-bit values, one for
- * each bit, low bit first.  It may be unused if hamming_distance()
- * doesn't use it.
+ * each bit, low bit first.
  */
 static inline int
 convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
@@ -771,21 +761,12 @@ convdecode_symbol_i(struct convcode *ce, unsigned int symbol,
 
 	dist1 = prevp[pstate1];
 	bit1 = get_prev_bit(ce, pstate1, i);
-	if (do_uncertainty)
-	    dist1 += hamming_distance_u(ce, ce->convert[bit1][pstate1], symbol,
-					uncertainty);
-	else
-	    dist1 += hamming_distance_nu(ce, ce->convert[bit1][pstate1], symbol,
-					 NULL);
+	dist1 += hamming_distance(ce, ce->convert[bit1][pstate1], symbol,
+				  do_uncertainty, uncertainty);
 	dist2 = prevp[pstate2];
 	bit2 = get_prev_bit(ce, pstate2, i);
-	if (do_uncertainty)
-	    dist2 += hamming_distance_u(ce, ce->convert[bit2][pstate2], symbol,
-				      uncertainty);
-	else
-	    dist2 += hamming_distance_nu(ce, ce->convert[bit2][pstate2], symbol,
-					 NULL);
-
+	dist2 += hamming_distance(ce, ce->convert[bit2][pstate2], symbol,
+				  do_uncertainty, uncertainty);
 
 	if (dist2 < dist1) {
 	    trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
@@ -1143,7 +1124,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 static inline unsigned int
 backwards_one_level(struct convcode *ce, const unsigned char *bytes,
 		    const uint8_t *uncertainty, unsigned int cstate,
-		    hamming_distance_f hamming_distance,
+		    bool do_uncertainty,
 		    unsigned int i, bool do_output,
 		    unsigned int *cuncertainty,
 		    unsigned char *outbytes,
@@ -1177,7 +1158,8 @@ backwards_one_level(struct convcode *ce, const unsigned char *bytes,
 	inpos = i * ce->num_polys;
 	bits = extract_bits(bytes, inpos, ce->num_polys);
 	*cuncertainty -= hamming_distance(ce, ce->convert[bit][pstate],
-					  bits, uncertainty + inpos);
+					  bits, do_uncertainty,
+					  uncertainty + inpos);
     }
 
     return pstate;
@@ -1193,15 +1175,11 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
     int rv;
     unsigned int i, extra_bits = 0;
     unsigned int min_val, cuncertainty, cstate;
-    hamming_distance_f hamming_distance;
 
-    if (uncertainty) {
-	hamming_distance = hamming_distance_u;
+    if (uncertainty)
 	rv = convdecode_data_u(ce, bytes, nbits, uncertainty);
-    } else {
-	hamming_distance = hamming_distance_nu;
+    else
 	rv = convdecode_data(ce, bytes, nbits);
-    }
     if (rv)
 	return rv;
 
@@ -1229,27 +1207,46 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 
     /* Optimize away output_uncertainty checks. */
     if (output_uncertainty) {
-	while (extra_bits > 0 && i > 0) {
-	    i--;
-	    cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
-					 hamming_distance,
-					 i, false, &cuncertainty, outbytes,
-					 true, output_uncertainty);
-	    extra_bits--;
-	}
+	if (uncertainty) {
+	    while (extra_bits > 0 && i > 0) {
+		i--;
+		cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
+					     true,
+					     i, false, &cuncertainty, outbytes,
+					     true, output_uncertainty);
+		extra_bits--;
+	    }
 
-	while (i > 0) {
-	    i--;
-	    cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
-					 hamming_distance,
-					 i, true, &cuncertainty, outbytes,
-					 true, output_uncertainty);
+	    while (i > 0) {
+		i--;
+		cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
+					     true,
+					     i, true, &cuncertainty, outbytes,
+					     true, output_uncertainty);
+	    }
+	} else {
+	    while (extra_bits > 0 && i > 0) {
+		i--;
+		cstate = backwards_one_level(ce, bytes, NULL, cstate,
+					     false,
+					     i, false, &cuncertainty, outbytes,
+					     true, output_uncertainty);
+		extra_bits--;
+	    }
+
+	    while (i > 0) {
+		i--;
+		cstate = backwards_one_level(ce, bytes, NULL, cstate,
+					     false,
+					     i, true, &cuncertainty, outbytes,
+					     true, output_uncertainty);
+	    }
 	}
     } else {
 	while (extra_bits > 0 && i > 0) {
 	    i--;
-	    cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
-					 hamming_distance,
+	    cstate = backwards_one_level(ce, bytes, NULL, cstate,
+					 false,
 					 i, false, &cuncertainty, outbytes,
 					 false, NULL);
 	    extra_bits--;
@@ -1257,8 +1254,8 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 
 	while (i > 0) {
 	    i--;
-	    cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
-					 hamming_distance,
+	    cstate = backwards_one_level(ce, bytes, NULL, cstate,
+					 false,
 					 i, true, &cuncertainty, outbytes,
 					 false, NULL);
 	}
