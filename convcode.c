@@ -710,8 +710,9 @@ convdecode_symbol(struct convcode *ce, unsigned int symbol,
     unsigned int i;
     convcode_state *trel;
 
-    if (ce->ctrellis + ce->num_polys > ce->trellis_size)
-	return 1;
+#if CONVCODE_DEBUG_STATES
+    assert(ce->ctrellis + ce->num_polys < ce->trellis_size);
+#endif
 
     if (ce->tmptrel)
 	trel = ce->tmptrel;
