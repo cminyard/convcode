@@ -884,6 +884,67 @@ extract_bits(const unsigned char *bytes, unsigned int curr, unsigned int nbits)
     return v;
 }
 
+/*
+ * Handle some new bits if we have leftover bits from the previous
+ * handling.  If there are not enough new bits for a symbol, this just
+ * adds the new bits and returns.  Otherwise this takes the old bits
+ * and sets up for processing the next symbol.
+ *
+ * The uncertainty check should optimize away if not needed.
+ */
+static inline bool
+process_old_leftover_bits(struct convcode *ce,
+			  const unsigned char *bytes,
+			  unsigned int *nbits,
+			  unsigned int *curr_bit,
+			  const uint8_t *uncertainty)
+{
+    unsigned int newbits, extract_size, i;
+
+    if (*nbits + ce->leftover_bits < ce->num_polys) {
+	/* Not enough bits for a full symbol, just store these. */
+	ce->leftover_bits_data |= bytes[0] << ce->leftover_bits;
+	ce->leftover_bits += *nbits;
+	ce->leftover_bits_data &= (1 << ce->leftover_bits) - 1;
+	return false;
+    }
+    /* We got enough bits for a full symbol, process it. */
+    extract_size = ce->num_polys - ce->leftover_bits;
+    newbits = extract_bits(bytes, *curr_bit, extract_size);
+    *curr_bit += extract_size;
+    *nbits -= extract_size;
+    ce->leftover_bits_data |= newbits << ce->leftover_bits;
+    if (uncertainty) {
+	for (i = 0; i < extract_size; i++)
+	    ce->leftover_uncertainty[ce->leftover_bits++] = uncertainty[i];
+    }
+    return true;
+}
+
+/*
+ * Handle leftover bits after processing a set of symbols.  This will
+ * store any leftover bits for processing later.
+ *
+ * The uncertainty check should optimize away if not needed.
+ */
+static inline void
+handle_new_leftover_bits(struct convcode *ce,
+			 const unsigned char *bytes, unsigned int nbits,
+			 unsigned int curr_bit, const uint8_t *uncertainty)
+{
+    unsigned int i;
+
+    ce->leftover_bits = nbits;
+    if (nbits) {
+	ce->leftover_bits_data = bytes[curr_bit / 8] >> (curr_bit % 8);
+	ce->leftover_bits_data &= (1 << nbits) - 1;
+	if (uncertainty) {
+	    for (i = 0; i < ce->leftover_bits; i++)
+		ce->leftover_uncertainty[i] = uncertainty[curr_bit++];
+	}
+    }
+}
+
 int
 convdecode_data(struct convcode *ce,
 		const unsigned char *bytes, unsigned int nbits)
@@ -892,21 +953,8 @@ convdecode_data(struct convcode *ce,
     int rv;
 
     if (ce->leftover_bits) {
-	unsigned int newbits, extract_size;
-
-	if (nbits + ce->leftover_bits < ce->num_polys) {
-	    /* Not enough bits for a full symbol, just store these. */
-	    ce->leftover_bits_data |= bytes[0] << ce->leftover_bits;
-	    ce->leftover_bits += nbits;
-	    ce->leftover_bits_data &= (1 << ce->leftover_bits) - 1;
+	if (!process_old_leftover_bits(ce, bytes, &nbits, &curr_bit, NULL))
 	    return 0;
-	}
-	/* We got enough bits for a full symbol, process it. */
-	extract_size = ce->num_polys - ce->leftover_bits;
-	newbits = extract_bits(bytes, curr_bit, extract_size);
-	curr_bit += extract_size;
-	nbits -= extract_size;
-	ce->leftover_bits_data |= newbits << ce->leftover_bits;
 	rv = convdecode_symbol(ce, ce->leftover_bits_data);
 	if (rv)
 	    return rv;
@@ -922,11 +970,7 @@ convdecode_data(struct convcode *ce,
 	curr_bit += ce->num_polys;
 	nbits -= ce->num_polys;
     }
-    ce->leftover_bits = nbits;
-    if (nbits) {
-	ce->leftover_bits_data = bytes[curr_bit / 8] >> (curr_bit % 8);
-	ce->leftover_bits_data &= (1 << nbits) - 1;
-    }
+    handle_new_leftover_bits(ce, bytes, nbits, curr_bit, NULL);
     return 0;
 }
 
@@ -935,29 +979,13 @@ convdecode_data_u(struct convcode *ce,
 		  const unsigned char *bytes, unsigned int nbits,
 		  const uint8_t *uncertainty)
 {
-    unsigned int curr_bit = 0, i;
+    unsigned int curr_bit = 0;
     int rv;
 
     if (ce->leftover_bits) {
-	unsigned int newbits, extract_size;
-
-	if (nbits + ce->leftover_bits < ce->num_polys) {
-	    /* Not enough bits for a full symbol, just store these. */
-	    ce->leftover_bits_data |= bytes[0] << ce->leftover_bits;
-	    for (i = 0; i < nbits; i++)
-		ce->leftover_uncertainty[ce->leftover_bits++] =
-		    uncertainty[i];
-	    ce->leftover_bits_data &= (1 << ce->leftover_bits) - 1;
+	if (!process_old_leftover_bits(ce, bytes, &nbits, &curr_bit,
+				       uncertainty))
 	    return 0;
-	}
-	/* We got enough bits for a full symbol, process it. */
-	extract_size = ce->num_polys - ce->leftover_bits;
-	newbits = extract_bits(bytes, curr_bit, extract_size);
-	curr_bit += extract_size;
-	nbits -= extract_size;
-	ce->leftover_bits_data |= newbits << ce->leftover_bits;
-	for (i = 0; i < extract_size; i++)
-	    ce->leftover_uncertainty[ce->leftover_bits++] = uncertainty[i];
 	rv = convdecode_symbol_u(ce, ce->leftover_bits_data,
 				 ce->leftover_uncertainty);
 	if (rv)
@@ -974,13 +1002,7 @@ convdecode_data_u(struct convcode *ce,
 	curr_bit += ce->num_polys;
 	nbits -= ce->num_polys;
     }
-    ce->leftover_bits = nbits;
-    if (nbits) {
-	ce->leftover_bits_data = bytes[curr_bit / 8] >> (curr_bit % 8);
-	ce->leftover_bits_data &= (1 << nbits) - 1;
-	for (i = 0; i < ce->leftover_bits; i++)
-	    ce->leftover_uncertainty[i] = uncertainty[curr_bit++];
-    }
+    handle_new_leftover_bits(ce, bytes, nbits, curr_bit, uncertainty);
     return 0;
 }
 
