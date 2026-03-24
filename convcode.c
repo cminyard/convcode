@@ -489,6 +489,7 @@ int
 convencode_bit(struct convcode *ce, unsigned int bit)
 {
     convcode_state state = ce->enc_state;
+
     ce->enc_state = ce->next_state[bit][state];
     return ce->enc_out.output_bits(ce, &ce->enc_out,
 				   ce->convert[bit][state], ce->num_polys);
@@ -498,20 +499,32 @@ int
 convencode_data(struct convcode *ce,
 		const unsigned char *bytes, unsigned int nbits)
 {
+    unsigned int nbytes = nbits / 8;
+    unsigned int extra_bits = nbits % 8;
+    unsigned char byte;
     unsigned int i, j;
     int rv;
 
-    for (i = 0; nbits > 0; i++) {
-	unsigned char byte = bytes[i];
-
-	for (j = 0; nbits > 0 && j < 8; j++) {
+    for (i = 0; i < nbytes; i++) {
+	byte = bytes[i];
+	for (j = 0; j < 8; j++) {
 	    rv = convencode_bit(ce, byte & 1);
-	    byte >>= 1;
 	    if (rv)
 		return rv;
-	    nbits--;
+	    byte >>= 1;
 	}
     }
+
+    if (extra_bits > 0) {
+	byte = bytes[i];
+	for (i = 0; i < extra_bits; i++) {
+	    rv = convencode_bit(ce, byte & 1);
+	    if (rv)
+		return rv;
+	    byte >>= 1;
+	}
+    }
+
     return 0;
 }
 
@@ -534,7 +547,7 @@ convencode_finish(struct convcode *ce, unsigned int *total_out_bits)
     return 0;
 }
 
-static void
+static inline void
 convencode_block_bit(struct convcode *ce, unsigned int bit,
 		     unsigned char **ioutbytes,
 		     unsigned int *ioutbitpos)
@@ -576,15 +589,23 @@ convencode_block_partial(struct convcode *ce,
 			 const unsigned char *bytes, unsigned int nbits,
 			 unsigned char **outbytes, unsigned int *outbitpos)
 {
+    unsigned int nbytes = nbits / 8;
+    unsigned int extra_bits = nbits % 8;
     unsigned int i, j;
+    unsigned char byte;
 
-    for (i = 0; nbits > 0; i++) {
-	unsigned char byte = bytes[i];
-
-	for (j = 0; nbits > 0 && j < 8; j++) {
+    for (i = 0; i < nbytes; i++) {
+	byte = bytes[i];
+	for (j = 0; j < 8; j++) {
 	    convencode_block_bit(ce, byte & 1, outbytes, outbitpos);
+	    byte >>= 1;
+	}
+    }
 
-	    nbits--;
+    if (extra_bits > 0) {
+	byte = bytes[i];
+	for (j = 0; j < extra_bits; j++) {
+	    convencode_block_bit(ce, byte & 1, outbytes, outbitpos);
 	    byte >>= 1;
 	}
     }
