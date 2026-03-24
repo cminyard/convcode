@@ -1325,7 +1325,7 @@ backwards_one_level(struct convcode *ce, const unsigned char *bytes,
     if (do_output)
 	outbytes[i / 8] |= bit << (i % 8);
 
-    if (output_uncertainty) {
+    if (do_output_uncertainty) {
 	if (do_output)
 	    output_uncertainty[i] = *cuncertainty;
 
