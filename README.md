@@ -5,6 +5,11 @@ I was in need of a convolutional coder and viterbi/BCJR decoder in C,
 and, well, I couldn't find anything suitable.  So unfortunately, I had
 to write one.
 
+This is highly optimized and will detect optimizations it can do and
+install those.  It does not use SIMD, that is perhaps the next step,
+but it's hard to figure out how to do that, and it may not make that
+big of a difference.
+
 To avoid others having the same problem, I've uploaded mine.
 
 The API is described in the convcode.h file.

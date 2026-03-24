@@ -244,6 +244,9 @@ setup_convcode1(struct convcode *ce, unsigned int k,
 	}
     }
 
+    if (num_polynomials == 2 || num_polynomials == 4 || num_polynomials == 8)
+	ce->optimize_no_span = true;
+
     /*
      * Polynomials come in as the first bit being the high bit.  We
      * have to spin them around because we process using the first bit
@@ -489,10 +492,15 @@ int
 convencode_bit(struct convcode *ce, unsigned int bit)
 {
     convcode_state state = ce->enc_state;
+    unsigned int outbits;
 
+    /* Next state */
     ce->enc_state = ce->next_state[bit][state];
-    return ce->enc_out.output_bits(ce, &ce->enc_out,
-				   ce->convert[bit][state], ce->num_polys);
+
+    /* Get the bits to send in the bottom bits of outbits. */
+    outbits = ce->convert[bit][state];
+
+    return ce->enc_out.output_bits(ce, &ce->enc_out, outbits, ce->num_polys);
 }
 
 int
@@ -547,8 +555,19 @@ convencode_finish(struct convcode *ce, unsigned int *total_out_bits)
     return 0;
 }
 
+/*
+ * Calculate the next state and output bits.  Put the output bits into
+ * the output byte array.
+ *
+ * If do_bit_span is set, that means bits can possibly span a byte, so
+ * special handling is required.  If it is not set, that means
+ * num_polys is 2, 4, or 8 and the starting bit is 0, thus the bits
+ * will never span a byte.  This lets the compiler optimize that code
+ * away if do_bit_span is false.
+ */
 static inline void
 convencode_block_bit(struct convcode *ce, unsigned int bit,
+		     bool do_bit_span,
 		     unsigned char **ioutbytes,
 		     unsigned int *ioutbitpos)
 {
@@ -558,25 +577,40 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
     unsigned int outbitpos = *ioutbitpos;
     unsigned int nbytebits = 8 - outbitpos;
 
+    /* Next state */
     ce->enc_state = ce->next_state[bit][state];
 
+    /* Get the bits to send in the bottom bits of outbits. */
     outbits = ce->convert[bit][state];
     bits_left = ce->num_polys;
 
     /* Now comes the messy job of putting the bits into outbytes. */
-    while (bits_left > nbytebits) {
-	/* Bits going into this byte. */
-	unsigned int cbits = outbits & ((1 << nbytebits) - 1);
 
-	*outbytes++ |= cbits << outbitpos;
-	outbitpos = 0;
-	outbits >>= nbytebits;
-	bits_left -= nbytebits;
-	nbytebits = 8 - outbitpos;
+    if (do_bit_span) {
+	/*
+	 * If the current byte cannot hold all the bits, we have to
+	 * put some of the bits in it and some into the next.
+	 */
+	while (bits_left > nbytebits) {
+	    /* Bits going into this byte. */
+	    unsigned int cbits = outbits & ((1 << nbytebits) - 1);
+
+	    *outbytes++ |= cbits << outbitpos;
+	    outbitpos = 0;
+	    outbits >>= nbytebits;
+	    bits_left -= nbytebits;
+	    nbytebits = 8 - outbitpos;
+	}
     }
+
+    /*
+     * At this point all the bits will fit into the current output
+     * byte.  Stuff them in.
+     */
     *outbytes |= outbits << outbitpos;
     outbitpos += bits_left;
     if (outbitpos >= 8) {
+	/* Finished this byte, move to the next. */
 	outbytes++;
 	outbitpos = 0;
     }
@@ -584,10 +618,11 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
     *ioutbitpos = outbitpos;
 }
 
-void
-convencode_block_partial(struct convcode *ce,
-			 const unsigned char *bytes, unsigned int nbits,
-			 unsigned char **outbytes, unsigned int *outbitpos)
+static inline void
+convencode_block_partial_i(struct convcode *ce,
+			   const unsigned char *bytes, unsigned int nbits,
+			   bool do_bit_span,
+			   unsigned char **outbytes, unsigned int *outbitpos)
 {
     unsigned int nbytes = nbits / 8;
     unsigned int extra_bits = nbits % 8;
@@ -597,7 +632,7 @@ convencode_block_partial(struct convcode *ce,
     for (i = 0; i < nbytes; i++) {
 	byte = bytes[i];
 	for (j = 0; j < 8; j++) {
-	    convencode_block_bit(ce, byte & 1, outbytes, outbitpos);
+	    convencode_block_bit(ce, byte & 1, do_bit_span, outbytes, outbitpos);
 	    byte >>= 1;
 	}
     }
@@ -605,30 +640,64 @@ convencode_block_partial(struct convcode *ce,
     if (extra_bits > 0) {
 	byte = bytes[i];
 	for (j = 0; j < extra_bits; j++) {
-	    convencode_block_bit(ce, byte & 1, outbytes, outbitpos);
+	    convencode_block_bit(ce, byte & 1, do_bit_span, outbytes, outbitpos);
 	    byte >>= 1;
 	}
     }
 }
 
 void
+convencode_block_partial(struct convcode *ce,
+			 const unsigned char *bytes, unsigned int nbits,
+			 unsigned char **outbytes, unsigned int *outbitpos)
+{
+    convencode_block_partial_i(ce, bytes, nbits, true, outbytes, outbitpos);
+}
+
+void
+convencode_block_partial_ns(struct convcode *ce,
+			    const unsigned char *bytes, unsigned int nbits,
+			    unsigned char **outbytes, unsigned int *outbitpos)
+{
+    convencode_block_partial_i(ce, bytes, nbits, false, outbytes, outbitpos);
+}
+
+void
 convencode_block_final(struct convcode *ce,
-		       const unsigned char *bytes, unsigned int nbits,
 		       unsigned char *outbytes, unsigned int outbitpos)
 {
     unsigned int i;
 
-    convencode_block_partial(ce, bytes, nbits, &outbytes, &outbitpos);
     for (i = 0; i < ce->tail_bits; i++)
-	convencode_block_bit(ce, 0, &outbytes, &outbitpos);
+	convencode_block_bit(ce, 0, true, &outbytes, &outbitpos);
+}
+
+void
+convencode_block_final_ns(struct convcode *ce,
+			  unsigned char *outbytes, unsigned int outbitpos)
+{
+    unsigned int i;
+
+    for (i = 0; i < ce->tail_bits; i++)
+	convencode_block_bit(ce, 0, false, &outbytes, &outbitpos);
 }
 
 void
 convencode_block(struct convcode *ce,
 		 const unsigned char *bytes, unsigned int nbits,
-		 unsigned char *outbytes)
+		 unsigned char *outbytes, unsigned int *total_out_bits)
 {
-    convencode_block_final(ce, bytes, nbits, outbytes, 0);
+    unsigned int outbitpos = 0;
+
+    if (ce->optimize_no_span) {
+	convencode_block_partial_ns(ce, bytes, nbits, &outbytes, &outbitpos);
+	convencode_block_final_ns(ce, outbytes, outbitpos);
+    } else {
+	convencode_block_partial(ce, bytes, nbits, &outbytes, &outbitpos);
+	convencode_block_final(ce, outbytes, outbitpos);
+    }
+    if (total_out_bits)
+	*total_out_bits = (nbits + ce->tail_bits) * ce->num_polys;
 }
 
 /*
@@ -1603,12 +1672,8 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	    unsigned int bit = decoded[i] == '0' ? 0 : 1;
 	    t.dec_bytes[i / 8] |= bit << (i % 8);
 	}
-	enc_nbits = dec_nbits;
-	if (do_tail)
-	    enc_nbits += k - 1;
-	enc_nbits *= npolys;
 
-	convencode_block(ce, t.dec_bytes, dec_nbits, t.enc_bytes);
+	convencode_block(ce, t.dec_bytes, dec_nbits, t.enc_bytes, &enc_nbits);
 	for (i = 0; i < enc_nbits; i++) {
 	    unsigned int bit = encoded[i] == '0' ? 0 : 1;
 
@@ -1673,11 +1738,8 @@ rand_block_test(struct convcode *ce,
 	unsigned int bit = decoded[i] == '0' ? 0 : 1;
 	t.dec_bytes[i / 8] |= bit << (i % 8);
     }
-    enc_nbits = dec_nbits;
-    enc_nbits += ce->tail_bits;
-    enc_nbits *= ce->num_polys;
 
-    convencode_block(ce, t.dec_bytes, dec_nbits, t.enc_bytes);
+    convencode_block(ce, t.dec_bytes, dec_nbits, t.enc_bytes, &enc_nbits);
     for (i = 0; i < enc_nbits; i++) {
 	unsigned int bit = encoded[i] == '0' ? 0 : 1;
 

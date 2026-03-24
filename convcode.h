@@ -267,26 +267,41 @@ int convencode_finish(struct convcode *ce, unsigned int *total_out_bits);
  * output.  If tail is set, then this will be ((nbits + k - 1) *
  * num_polynomials).  If tail is not set, this will be (nbits *
  * num_polynomials).  The output function is not used in this case.
- * If doing partial blocks, outbitpos is the current output bit position.
- * Pass in 0 if not using partial blocks, pass in the output of outbitpos
- * if you are.
+ *
+ * This will automatically do the no-span optimization if it can,
+ * see the next comment for details on that.
+ *
+ * If total_out_bits is not NULL, the total number of bits generated
+ * into outbytes will be returned there.
  */
 void convencode_block(struct convcode *ce,
 		      const unsigned char *bytes, unsigned int nbits,
-		      unsigned char *outbytes);
+		      unsigned char *outbytes, unsigned int *total_out_bits);
 
 /*
  * For multi-part block operations, you can call convencode_block
- * partial() for all but the last block, and call
- * convencode_block_final() for the last one.
+ * partial() for all blocks, and call convencode_block_final() at the
+ * end to handle the tail bits (if you have that set).
+ *
+ * The _ns (no-span) versions can be used as an optimization in case
+ * the number of polynomials is 2, 4, or 8 and you start on bit 0 of
+ * the output bytes.  This way the calculations to handle putting the
+ * bits into the bytes never have to handle spanned bits (where some
+ * bits of a symbol go into one byte and the rest go into the next
+ * byte).
  */
 void convencode_block_partial(struct convcode *ce,
 			      const unsigned char *bytes, unsigned int nbits,
 			      unsigned char **outbytes,
 			      unsigned int *outbitpos);
+void convencode_block_partial_ns(struct convcode *ce,
+				 const unsigned char *bytes, unsigned int nbits,
+				 unsigned char **outbytes,
+				 unsigned int *outbitpos);
 void convencode_block_final(struct convcode *ce,
-			    const unsigned char *bytes, unsigned int nbits,
 			    unsigned char *outbytes, unsigned int outbitpos);
+void convencode_block_final_ns(struct convcode *ce,
+			       unsigned char *outbytes, unsigned int outbitpos);
 
 /*
  * Feed some data into decoder.  The size is given in bits, the data
@@ -327,8 +342,9 @@ int convdecode_data_u(struct convcode *ce,
  *
  * Returns nonzero on an error.
  */
-#define convdecode_symbol(ce, symbol) ce->decode_symbol(ce, symbol, NULL)
-#define convdecode_symbol_u(ce, symbol, uncertainty)	\
+#define convdecode_symbol(ce, symbol) \
+    ce->decode_symbol(ce, symbol, NULL)
+#define convdecode_symbol_u(ce, symbol, uncertainty) \
     ce->decode_symbol(ce, symbol, uncertainty)
 
 /*
@@ -448,6 +464,13 @@ struct convcode {
     /* Polynomials. */
     convcode_state polys[CONVCODE_MAX_POLYNOMIALS];
     unsigned int num_polys;
+
+    /*
+     * Set if num_polys is 2, 4, or 8.  This lets us optimize putting
+     * the bits into the output bytes when encoding as the bits will
+     * never span a byte.
+     */
+    bool optimize_no_span;
 
     unsigned int tail_bits; /* Number of tail bits, 0 if no tail. */
     bool recursive;
