@@ -783,6 +783,11 @@ decode_one_state(struct convcode *ce, unsigned int i, convcode_symsize symbol,
     pstate1 = i >> 1;
     pstate2 = pstate1 | (1 << (ce->k - 2));
 
+    /*
+     * Now calculate the distance (number of errors without
+     * uncertainty, else the total uncertainty) for each previous
+     * state.
+     */
     dist1 = prevp[pstate1];
     bit1 = get_prev_bit(ce, do_recursive, pstate1, i);
     dist1 += hamming_distance(ce, ce->convert[bit1][pstate1], symbol,
@@ -792,6 +797,10 @@ decode_one_state(struct convcode *ce, unsigned int i, convcode_symsize symbol,
     dist2 += hamming_distance(ce, ce->convert[bit2][pstate2], symbol,
 			      do_uncertainty, uncertainty);
 
+    /*
+     * Pick the previous state with the lowest error or uncertainty.
+     * The top bit of trel[i] is where the actual bit value is stored.
+     */
     if (dist2 < dist1) {
 	trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
 	currp[i] = dist2;
@@ -811,21 +820,32 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
 		    bool do_tmptrel, bool do_uncertainty, bool do_recursive,
 		    const uint8_t *uncertainty)
 {
+    /* Previous error count/uncertainty values. */
     unsigned int *prevp = ce->prev_path_values;
+    /* Error count/uncertainty values we will calculate. */
     unsigned int *currp = ce->curr_path_values;
     unsigned int i;
+    /* Trellis we are working on. */
     convcode_state *trel;
 
 #if CONVCODE_DEBUG_STATES
     assert(ce->ctrellis + ce->num_polys < ce->trellis_size);
 #endif
 
+    /*
+     * If the trellis width is less than the number of states, we have
+     * a temporary trellis array that holds the number of states.
+     * Otherwise we work directly in the trellis.
+     */
     if (do_tmptrel)
 	trel = ce->tmptrel;
     else
 	trel = get_trellis_column(ce, ce->ctrellis);
 
     /*
+     * For each possible state, calculate the most probable previous
+     * state and the total error or uncertainty for that state.
+     *
      * k must be at least 3, so num_states must be at least 4 and must
      * be a multiple of 4.  So we can unroll the loop a bit.
      */
@@ -851,6 +871,11 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
     printf("\n");
 #endif
 
+    /*
+     * If the trellis width is less than the number of states, we have
+     * to find the most probable values in the temporary trellis array
+     * and put them into the trellis.
+     */
     if (do_tmptrel) {
 	convcode_state *ntrel = get_trellis_column(ce, ce->ctrellis);
 
