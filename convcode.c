@@ -200,7 +200,7 @@ setup_convcode1(struct convcode *ce, unsigned int k,
 
     if (num_polynomials < 1 || num_polynomials > CONVCODE_MAX_POLYNOMIALS)
 	return 1;
-    if (k > CONVCODE_MAX_K)
+    if (k < CONVCODE_MIN_K || k > CONVCODE_MAX_K)
 	return 1;
 
     memset(ce, 0, sizeof(*ce));
@@ -765,6 +765,42 @@ sort_tmptrel(struct convcode *ce)
 #endif
 }
 
+static inline void
+decode_one_state(struct convcode *ce, unsigned int i, convcode_symsize symbol,
+		 unsigned int *prevp, unsigned int *currp, convcode_state *trel,
+		 bool do_uncertainty, bool do_recursive,
+		 const uint8_t *uncertainty)
+{
+    convcode_state pstate1, pstate2;
+    int bit1, bit2;
+    unsigned int dist1, dist2;
+
+    /*
+     * This state could have come from two different previous
+     * states, one with the top bit set (pstate2) and with with
+     * the top bit clear (pstate1).  We check both of those.
+     */
+    pstate1 = i >> 1;
+    pstate2 = pstate1 | (1 << (ce->k - 2));
+
+    dist1 = prevp[pstate1];
+    bit1 = get_prev_bit(ce, do_recursive, pstate1, i);
+    dist1 += hamming_distance(ce, ce->convert[bit1][pstate1], symbol,
+			      do_uncertainty, uncertainty);
+    dist2 = prevp[pstate2];
+    bit2 = get_prev_bit(ce, do_recursive, pstate2, i);
+    dist2 += hamming_distance(ce, ce->convert[bit2][pstate2], symbol,
+			      do_uncertainty, uncertainty);
+
+    if (dist2 < dist1) {
+	trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
+	currp[i] = dist2;
+    } else {
+	trel[i] = pstate1 | (bit1 << CONVCODE_MAX_K);
+	currp[i] = dist1;
+    }
+}
+
 /*
  * We come here with a symbol (the number of bits is the number of
  * polynomials) The uncertainty is an array of 8-bit values, one for
@@ -789,35 +825,19 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
     else
 	trel = get_trellis_column(ce, ce->ctrellis);
 
-    for (i = 0; i < ce->num_states; i++) {
-	convcode_state pstate1, pstate2;
-	int bit1, bit2;
-	unsigned int dist1, dist2;
-
-	/*
-	 * This state could have come from two different previous
-	 * states, one with the top bit set (pstate2) and with with
-	 * the top bit clear (pstate1).  We check both of those.
-	 */
-	pstate1 = i >> 1;
-	pstate2 = pstate1 | (1 << (ce->k - 2));
-
-	dist1 = prevp[pstate1];
-	bit1 = get_prev_bit(ce, do_recursive, pstate1, i);
-	dist1 += hamming_distance(ce, ce->convert[bit1][pstate1], symbol,
-				  do_uncertainty, uncertainty);
-	dist2 = prevp[pstate2];
-	bit2 = get_prev_bit(ce, do_recursive, pstate2, i);
-	dist2 += hamming_distance(ce, ce->convert[bit2][pstate2], symbol,
-				  do_uncertainty, uncertainty);
-
-	if (dist2 < dist1) {
-	    trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
-	    currp[i] = dist2;
-	} else {
-	    trel[i] = pstate1 | (bit1 << CONVCODE_MAX_K);
-	    currp[i] = dist1;
-	}
+    /*
+     * k must be at least 3, so num_states must be at least 4 and must
+     * be a multiple of 4.  So we can unroll the loop a bit.
+     */
+    for (i = 0; i < ce->num_states; ) {
+	decode_one_state(ce, i++, symbol, prevp, currp, trel,
+			 do_uncertainty, do_recursive, uncertainty);
+	decode_one_state(ce, i++, symbol, prevp, currp, trel,
+			 do_uncertainty, do_recursive, uncertainty);
+	decode_one_state(ce, i++, symbol, prevp, currp, trel,
+			 do_uncertainty, do_recursive, uncertainty);
+	decode_one_state(ce, i++, symbol, prevp, currp, trel,
+			 do_uncertainty, do_recursive, uncertainty);
     }
 
 #if CONVCODE_DEBUG_STATES

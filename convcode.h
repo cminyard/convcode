@@ -33,8 +33,12 @@ struct convcode;
  * machine size, and the value to hold the state.  Keep it as small as
  * possible to reduce the trellis size.  Size of K is limited by this
  * value.  We use the top bit of this to store the bit value.
+ *
+ * As well, K must be a minimum of 3.  Less than this doesn't make
+ * much sense, and it lets us loop unroll a bit for optimization.
  */
 typedef uint16_t convcode_state;
+#define CONVCODE_MIN_K 3
 #define CONVCODE_MAX_K 15
 #define CONVCODE_PSTATE_VAL(v) ((v) & ~(1 << CONVCODE_MAX_K))
 #define CONVCODE_PSTATE_BIT(v) ((v) >> CONVCODE_MAX_K)
