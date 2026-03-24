@@ -18,6 +18,8 @@
 #include <assert.h>
 #endif
 
+#define FORCE_INLINE __attribute__((always_inline))
+
 /*
  * The trellis is a two-dimensional matrix, but the size is dynamic
  * based upon how it is created.  So we use a one-dimensional matrix
@@ -118,7 +120,7 @@ reverse_bits(unsigned int k, unsigned int val)
     return rv;
 }
 
-static inline unsigned int
+static FORCE_INLINE unsigned int
 num_bits_set(unsigned int v)
 {
 
@@ -136,7 +138,7 @@ num_bits_set(unsigned int v)
 }
 
 /* Is the number of set bits in the value odd?  Return 1 if true, 0 if false */
-static inline unsigned int
+static FORCE_INLINE unsigned int
 num_bits_is_odd(unsigned int v)
 {
     return num_bits_set(v) % 2;
@@ -565,7 +567,7 @@ convencode_finish(struct convcode *ce, unsigned int *total_out_bits)
  * will never span a byte.  This lets the compiler optimize that code
  * away if do_bit_span is false.
  */
-static inline void
+static FORCE_INLINE void
 convencode_block_bit(struct convcode *ce, unsigned int bit,
 		     bool do_bit_span,
 		     unsigned char **ioutbytes,
@@ -618,7 +620,7 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
     *ioutbitpos = outbitpos;
 }
 
-static inline void
+static FORCE_INLINE void
 convencode_block_partial_i(struct convcode *ce,
 			   const unsigned char *bytes, unsigned int nbits,
 			   bool do_bit_span,
@@ -711,7 +713,7 @@ convencode_block(struct convcode *ce,
  * we use the uncertainty of the bits being different (which is 100% -
  * uncertainty).
  */
-static inline unsigned int
+static FORCE_INLINE unsigned int
 hamming_distance(struct convcode *ce, convcode_symsize v1, convcode_symsize v2,
 		 bool do_uncertainty, const uint8_t *uncertainty)
 {
@@ -738,7 +740,7 @@ hamming_distance(struct convcode *ce, convcode_symsize v1, convcode_symsize v2,
  * cstate.  For recursive mode, you have to look at pstate to see what
  * it's next state is for each bit.
  */
-static inline int
+static FORCE_INLINE int
 get_prev_bit(struct convcode *ce, bool do_recursive,
 	     convcode_state pstate, convcode_state cstate)
 {
@@ -855,14 +857,14 @@ sort_tmptrel(struct convcode *ce)
 #endif
 }
 
-static inline void
+static FORCE_INLINE void
 decode_one_state(struct convcode *ce, unsigned int i, convcode_symsize symbol,
 		 unsigned int *prevp, unsigned int *currp, convcode_state *trel,
 		 bool do_uncertainty, bool do_recursive,
 		 const uint8_t *uncertainty)
 {
     convcode_state pstate1, pstate2;
-    int bit1, bit2;
+    unsigned int bit1, bit2;
     unsigned int dist1, dist2;
 
     /*
@@ -875,7 +877,7 @@ decode_one_state(struct convcode *ce, unsigned int i, convcode_symsize symbol,
 
     /*
      * Now calculate the distance (number of errors without
-     * uncertainty, else the total uncertainty) for each previous
+     * uncertainty, else the total uncertainty) based on each previous
      * state.
      */
     dist1 = prevp[pstate1];
@@ -900,12 +902,16 @@ decode_one_state(struct convcode *ce, unsigned int i, convcode_symsize symbol,
     }
 }
 
+#if DO_SIMD
+typedef unsigned int v4su __attribute__ ((vector_size (16)));
+#endif
+
 /*
  * We come here with a symbol (the number of bits is the number of
  * polynomials) The uncertainty is an array of 8-bit values, one for
  * each bit, low bit first.
  */
-static inline int
+static FORCE_INLINE int
 convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
 		    bool do_tmptrel, bool do_uncertainty, bool do_recursive,
 		    const uint8_t *uncertainty)
@@ -932,22 +938,90 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
     else
 	trel = get_trellis_column(ce, ce->ctrellis);
 
+#if DO_SIMD
     /*
-     * For each possible state, calculate the most probable previous
-     * state and the total error or uncertainty for that state.
-     *
-     * k must be at least 3, so num_states must be at least 4 and must
-     * be a multiple of 4.  So we can unroll the loop a bit.
+     * This is an SIMD implementation using GCC builtins, only valid
+     * for non-recursive without uncertainty.  It does 4 values at a
+     * time.  See the README for details on this.
      */
-    for (i = 0; i < ce->num_states; ) {
-	decode_one_state(ce, i++, symbol, prevp, currp, trel,
-			 do_uncertainty, do_recursive, uncertainty);
-	decode_one_state(ce, i++, symbol, prevp, currp, trel,
-			 do_uncertainty, do_recursive, uncertainty);
-	decode_one_state(ce, i++, symbol, prevp, currp, trel,
-			 do_uncertainty, do_recursive, uncertainty);
-	decode_one_state(ce, i++, symbol, prevp, currp, trel,
-			 do_uncertainty, do_recursive, uncertainty);
+    if (!do_recursive && !do_uncertainty) {
+	for (i = 0; i < ce->num_states; ) {
+	    convcode_state pstate1[4], pstate2[4];
+	    v4su cmpv1, cmpv2;
+	    v4su dist1, dist2;
+	    v4su tmp;
+	    unsigned int j;
+#define X(v) ((v) & 1)
+
+	    for (j = 0; j < 4; j++) {
+		pstate1[j] = (i + j) >> 1;
+		pstate2[j] = ((i + j) >> 1) | (1 << (ce->k - 2));
+	    }
+
+	    for (j = 0; j < 4; j++)
+		cmpv1[j] = ce->convert[X(i + j)][pstate1[j]];
+
+	    for (j = 0; j < 4; j++)
+		cmpv2[j] = ce->convert[X(i + j)][pstate2[j]];
+
+	    for (j = 0; j < 4; j++)
+		dist1[j] = prevp[pstate1[j]];
+
+	    for (j = 0; j < 4; j++)
+		dist2[j] = prevp[pstate2[j]];
+
+	    /*
+	     * Two implementations of doing popcount are shown below.
+	     * There's not much performance difference on my system.
+	     */
+	    cmpv1 ^= symbol;
+	    /* Russian peasant algorithm in SIMD */
+	    cmpv1 = (cmpv1 & 0x55555555) + ((cmpv1 >> 1) & 0x55555555);
+	    cmpv1 = (cmpv1 & 0x33333333) + ((cmpv1 >> 2) & 0x33333333);
+	    cmpv1 = (cmpv1 & 0x0f0f0f0f) + ((cmpv1 >> 4) & 0x0f0f0f0f);
+	    cmpv1 = (cmpv1 & 0x00ff00ff) + ((cmpv1 >> 8) & 0x00ff00ff);
+	    cmpv1 = (cmpv1 & 0x0000ffff) + ((cmpv1 >> 16) & 0x0000ffff);
+	    dist1 += cmpv1;
+
+	    cmpv2 ^= symbol;
+	    /* Builtin instruction, but not vectorized */
+	    for (j = 0; j < 4; j++)
+		tmp[j] = __builtin_popcount(cmpv2[j]);
+	    dist2 += tmp;
+
+	    tmp = dist2 < dist1;
+
+	    for (j = 0; j < 4; j++, i++) {
+		if (tmp[j]) {
+		    trel[i] = pstate2[j] | (X(i) << CONVCODE_MAX_K);
+		    currp[i] = dist2[j];
+		} else {
+		    trel[i] = pstate1[j] | (X(i) << CONVCODE_MAX_K);
+		    currp[i] = dist1[j];
+		}
+	    }
+	}
+#undef X
+    } else
+#endif
+    {
+	/*
+	 * For each possible state, calculate the most probable previous
+	 * state and the total error or uncertainty for that state.
+	 *
+	 * k must be at least 3, so num_states must be at least 4 and must
+	 * be a multiple of 4.  So we can unroll the loop a bit.
+	 */
+	for (i = 0; i < ce->num_states; ) {
+	    decode_one_state(ce, i++, symbol, prevp, currp, trel,
+			     do_uncertainty, do_recursive, uncertainty);
+	    decode_one_state(ce, i++, symbol, prevp, currp, trel,
+			     do_uncertainty, do_recursive, uncertainty);
+	    decode_one_state(ce, i++, symbol, prevp, currp, trel,
+			     do_uncertainty, do_recursive, uncertainty);
+	    decode_one_state(ce, i++, symbol, prevp, currp, trel,
+			     do_uncertainty, do_recursive, uncertainty);
+	}
     }
 
 #if CONVCODE_DEBUG_STATES
@@ -1117,7 +1191,7 @@ extract_bits(const unsigned char *bytes, unsigned int curr, unsigned int nbits)
  *
  * The uncertainty check should optimize away.
  */
-static inline bool
+static FORCE_INLINE bool
 process_old_leftover_bits(struct convcode *ce,
 			  const unsigned char *bytes,
 			  unsigned int *nbits,
@@ -1154,7 +1228,7 @@ process_old_leftover_bits(struct convcode *ce,
  *
  * The uncertainty check should optimize away.
  */
-static inline void
+static FORCE_INLINE void
 handle_new_leftover_bits(struct convcode *ce,
 			 const unsigned char *bytes, unsigned int nbits,
 			 unsigned int curr_bit,
@@ -1299,7 +1373,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  * The compiler should optimize away the do_output and
  * do_output_uncertainty checks since we pass in constants there.
  */
-static inline unsigned int
+static FORCE_INLINE unsigned int
 backwards_one_level(struct convcode *ce, const unsigned char *bytes,
 		    const uint8_t *uncertainty, unsigned int cstate,
 		    bool do_uncertainty,
@@ -1394,7 +1468,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 	    extra_bits--;
     }
 #else
-    /* Optimize away output_uncertainty and uncertainty checks. */
+    /* Optimize away output, output_uncertainty and uncertainty checks. */
     if (output_uncertainty) {
 	if (uncertainty) {
 	    while (extra_bits > 0 && i > 0) {

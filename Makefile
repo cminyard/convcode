@@ -1,5 +1,14 @@
 
-CFLAGS = -g -Wall -O3 -DCONVCODE_TESTS
+# See the README for comments on this.
+DO_SIMD = 0
+
+# X86 support
+# popcnt was added in the Nehalem CPU
+ARCH = -march=nehalem
+# If you set DO_SIMD, adding -msse2 will be required.
+#ARCH += -msse2
+
+CFLAGS = -g -Wall -O3 -DCONVCODE_TESTS -DDO_SIMD=$(DO_SIMD) $(ARCH)
 
 all: convcode interleave
 

@@ -138,7 +138,7 @@ static uint8_t *
 get_data(const char *input, unsigned int *rlen)
 {
     uint8_t *data;
-    unsigned int i, nbits, len, byte, bit;
+    unsigned int i, len, byte, bit;
 
     len = strlen(input);
     data = calloc(len, 1);
@@ -148,7 +148,6 @@ get_data(const char *input, unsigned int *rlen)
     for (i = 0, byte = 0, bit = 0; input[i]; i++) {
 	if (input[i] == '1')
 	    data[byte] |= 1 << bit;
-	nbits++;
 	bit++;
 	if (bit >= 8) {
 	    byte++;
