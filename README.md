@@ -10,8 +10,16 @@ To avoid others having the same problem, I've uploaded mine.
 
 The API is described in the convcode.h file.
 
-This supports tail-biting, soft decoding, recursive coders, and BCJR
-(sort of) decoding.  See the API for a description.
+This supports tail-biting, soft decoding, partial trellis, recursive
+coders, and BCJR (sort of) decoding.  See the API for a description.
+
+Some references, optimum convolutional code values for various sizes:
+
+https://komm.dev/res/convolutional-codes/
+
+and some theory:
+
+https://ocw.mit.edu/courses/6-451-principles-of-digital-communication-ii-spring-2005/43162a4e10d73639903282f4dd58001b_chap9.pdf
 
 ## Tests
 
@@ -19,6 +27,20 @@ Compile with -DCONVCODE_TESTS to enable tests and a main().  Search
 for "Test code" in convcode.c for details on how to use it.  Compiling
 with "make" here will compile with that enabled, "make check" will run
 the tests.
+
+## Memory Usage
+
+A convolutional decoder can use a lot of memory.  "k" represents the
+number of bits in the polynomial.  The trellis is 2 ^ (k -1) entries
+wide, and your trellis must have as many entries as you expect to
+decode.  The convcode.h file has details on memory usage.  If you want
+a 7-bit k and 
+
+You can save space at the expense of performance by using a partial
+trellis.  See the discussion of the trellis\_width parameter to
+alloc\_convcode() for details.
+
+You can also code in blocks so shorten.
 
 ## Fixed Implementations
 
@@ -61,7 +83,14 @@ version properly to get a \_\_builtin\_popcount() that is a single
 instruction.  It makes a huge difference.
 
 From an initial basic, nicely coded implementation to the highly
-optimized one I cut the CPU to less than 1/4 of what it was.
+optimized one I cut the CPU to less than 1/4 of what it was.  It's
+probably better than that, that includes all the test code that's not
+written very efficiently.  And I was careful to keep the code readable
+and maintainable, so it's still fairly straightforward to follow.
+
+The code size will be fairly large as it's aggressively inlined.  You
+can remove some inlining if the code takes up too much space.  And you
+can chop out functions that you don't need to save code space.
 
 ## SIMD
 
@@ -74,6 +103,9 @@ Looking at the generated code, there's a lot of instructions spent
 loading unloading the xmm registers, and just 5 instructions that are
 doing parallel operations.  If there was an SIMD version of popcnt it
 might break even or even be a little better, but there's not.
+
+I have currently only tried this on one x86_64 processor.  It may be
+better on ARM or RISC-V.  Testing needs to be done.
 
 ## Interleaver
 
