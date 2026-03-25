@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
 
@@ -77,7 +76,7 @@ reinit_convdecode(struct convcode *ce, unsigned int start_state,
 	    } else {
 		ce->prev_path_values[i] = init_other_states;
 		if (ce->trelmap)
-		    ce->trelmap[i] = i | (1 << CONVCODE_MAX_K);
+		    ce->trelmap[i] = CONVCODE_PSTATE_SET_BIT(i, 1);
 	    }
 	}
 	/*
@@ -778,8 +777,8 @@ cmp_states(const void *val1, const void *val2, void *ud)
 
     pstate1 = CONVCODE_PSTATE_VAL(pstate1);
     pstate2 = CONVCODE_PSTATE_VAL(pstate2);
-    invalid1 = ce->trelmap[pstate1] >> CONVCODE_MAX_K;
-    invalid2 = ce->trelmap[pstate2] >> CONVCODE_MAX_K;
+    invalid1 = CONVCODE_PSTATE_BIT(ce->trelmap[pstate1]);
+    invalid2 = CONVCODE_PSTATE_BIT(ce->trelmap[pstate2]);
     dist1 = ce->curr_path_values[state1];
     dist2 = ce->curr_path_values[state2];
 
@@ -850,7 +849,7 @@ sort_tmptrel(struct convcode *ce)
 	unsigned int dist = ce->curr_path_values[ce->tmptrelmap[i]];
 	bool invalid;
 
-	invalid = ce->trelmap[pstate] >> CONVCODE_MAX_K;
+	invalid = CONVCODE_PSTATE_BIT(ce->trelmap[pstate]);
 	pstate = CONVCODE_PSTATE_VAL(pstate);
 	printf("  %u %u %u %d:%u\n", i, ce->tmptrelmap[i], pstate, invalid, dist);
     }
@@ -894,10 +893,10 @@ decode_one_state(struct convcode *ce, unsigned int i, convcode_symsize symbol,
      * The top bit of trel[i] is where the actual bit value is stored.
      */
     if (dist2 < dist1) {
-	trel[i] = pstate2 | (bit2 << CONVCODE_MAX_K);
+	trel[i] = CONVCODE_PSTATE_SET_BIT(pstate2, bit2);
 	currp[i] = dist2;
     } else {
-	trel[i] = pstate1 | (bit1 << CONVCODE_MAX_K);
+	trel[i] = CONVCODE_PSTATE_SET_BIT(pstate1, bit1);
 	currp[i] = dist1;
     }
 }
@@ -993,10 +992,10 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
 
 	    for (j = 0; j < 4; j++, i++) {
 		if (tmp[j]) {
-		    trel[i] = pstate2[j] | (X(i) << CONVCODE_MAX_K);
+		    trel[i] = CONVCODE_PSTATE_SET_BIT(pstate2[j], X(i));
 		    currp[i] = dist2[j];
 		} else {
-		    trel[i] = pstate1[j] | (X(i) << CONVCODE_MAX_K);
+		    trel[i] = CONVCODE_PSTATE_SET_BIT(pstate1[j], X(i));
 		    currp[i] = dist1[j];
 		}
 	    }
@@ -1053,14 +1052,14 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
 	    int bit = CONVCODE_PSTATE_BIT(trel[v]);
 	    convcode_state pstate = CONVCODE_PSTATE_VAL(trel[v]);
 
-	    ntrel[i] = ce->trelmap[pstate] | (bit << CONVCODE_MAX_K);
+	    ntrel[i] = CONVCODE_PSTATE_SET_BIT(ce->trelmap[pstate], bit);
 	}
 
 	for (i = 0; i < ce->trelw; i++)
 	    ce->trelmap[ce->tmptrelmap[i]] = i;
 	for (; i < ce->num_states; i++)
 	    /* mark invalid */
-	    ce->trelmap[ce->tmptrelmap[i]] = 1 << CONVCODE_MAX_K;
+	    ce->trelmap[ce->tmptrelmap[i]] = CONVCODE_PSTATE_SET_BIT(0, 1);
     }
 
 #if CONVCODE_DEBUG_STATES
@@ -1077,7 +1076,7 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
 	    printf(" %u:%4.4u", i, ce-> tmptrelmap[i]);
 	printf("\n");
 	for (i = 0; i < ce->num_states; i++) {
-	    if (!(ce->trelmap[i] & (1 << CONVCODE_MAX_K)))
+	    if (!(ce->trelmap[i] & CONVCODE_PSTATE_SET_BIT(0, 1)))
 		printf(" %u:%u", i, ce->trelmap[i]);
 	}
 	printf("\n");
@@ -1652,11 +1651,14 @@ do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
     convdecode_finish(ce, total_bits, num_errs);
 }
 
+#define RAND_TEST_SIZE (256)
+#define MAX_TEST_POLYS 7
+#define MAX_TAIL (MAX_TEST_POLYS * (CONVCODE_MAX_K - 1))
 struct test_data {
-    char output[1024];
-    unsigned char enc_bytes[1024];
-    unsigned char dec_bytes[1024];
-    unsigned int uncertainties[1024];
+    char output[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
+    unsigned char enc_bytes[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
+    unsigned char dec_bytes[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
+    unsigned int uncertainties[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
     unsigned int outpos;
 };
 
@@ -1853,11 +1855,11 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     struct test_data t;
     struct convcode *ce;
     unsigned int i, j, bit, total_bits, num_errs, rv = 0;
-    char decoded[33];
-    char encoded[1024];
+    char decoded[RAND_TEST_SIZE + 1];
+    char encoded[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
     unsigned int len;
 
-    len = 32;
+    len = RAND_TEST_SIZE;
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
 			do_tail, recursive, false,
@@ -1983,6 +1985,21 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	errs += rand_test(3, polys, 2, do_tail, trellis_width, false,
 			  NULL, NULL);
     }
+    { /* https://komm.dev/res/convolutional-codes/ */
+	convcode_state polys[2] = { 013, 017 };
+	errs += rand_test(4, polys, 2, do_tail, trellis_width, false,
+			  NULL, NULL);
+    }
+    { /* https://komm.dev/res/convolutional-codes/ */
+	convcode_state polys[2] = { 027, 031 };
+	errs += rand_test(5, polys, 2, do_tail, trellis_width, false,
+			  NULL, NULL);
+    }
+    { /* https://komm.dev/res/convolutional-codes/ */
+	convcode_state polys[2] = { 053, 075 };
+	errs += rand_test(6, polys, 2, do_tail, trellis_width, false,
+			  NULL, NULL);
+    }
     { /* Voyager */
 	convcode_state polys[2] = { 0171, 0133 };
 	static uint8_t uncertainties[28] = {
@@ -2037,6 +2054,11 @@ run_tests(bool do_tail, convcode_state trellis_width)
 				 "10110111", 4, NULL, out_uncertainties2);
 	}
 	errs += rand_test(7, polys, 3, do_tail, trellis_width, false,
+			  NULL, NULL);
+    }
+    { /* https://komm.dev/res/convolutional-codes/ */
+	convcode_state polys[2] = { 0117, 0155 };
+	errs += rand_test(8, polys, 2, do_tail, trellis_width, false,
 			  NULL, NULL);
     }
 #if CONVCODE_MAX_K >= 9

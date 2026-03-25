@@ -34,14 +34,29 @@ struct convcode;
  * possible to reduce the trellis size.  Size of K is limited by this
  * value.  We use the top bit of this to store the bit value.
  *
+ * The state machine size is 2 ^ (K - 1), so a K of 8 will mean 7 bits
+ * is required for the state machine.  This means you can have an
+ * 7-bit state value and store the bit value in the top bit.  Or you
+ * can have a max K of 16 and a 15-bit state value.  Those are the
+ * most sensible values.
+ *
  * As well, K must be a minimum of 3.  Less than this doesn't make
  * much sense, and it lets us loop unroll a bit for optimization.
  */
-typedef uint16_t convcode_state;
 #define CONVCODE_MIN_K 3
-#define CONVCODE_MAX_K 15
-#define CONVCODE_PSTATE_VAL(v) ((v) & ~(1 << CONVCODE_MAX_K))
-#define CONVCODE_PSTATE_BIT(v) ((v) >> CONVCODE_MAX_K)
+#define CONVCODE_MAX_K 16
+#if (CONVCODE_MAX_K <= 8)
+typedef uint8_t convcode_state;
+#elif (CONVCODE_MAX_K <= 16)
+typedef uint16_t convcode_state;
+#elif (CONVCODE_MAX_K <= 32)
+typedef uint32_t convcode_state;
+#else
+#error CONVCODE_MAX_K must be <= 32.
+#endif
+#define CONVCODE_PSTATE_VAL(v) ((v) & ~(1 << (CONVCODE_MAX_K - 1)))
+#define CONVCODE_PSTATE_BIT(v) ((v) >> (CONVCODE_MAX_K - 1))
+#define CONVCODE_PSTATE_SET_BIT(v, b) ((v) | ((b) << (CONVCODE_MAX_K - 1)))
 
 /*
  * Used to report output bits as they are generated.
