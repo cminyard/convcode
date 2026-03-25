@@ -166,22 +166,25 @@ void convcode_set_dec_output(struct convcode *ce,
  * Normally you have a "tail" of the convolutional code, where you
  * feed k - 1 zeros to clear out the state and get the end state and
  * initial state the same.  That's normally what you want, so this
- * code does that for you if you set do_tail to true.  You can disable
- * the tail, but it reduces the performance of the code.
+ * code does that for you if you set do_tail to true.  It does output
+ * an extra (num_polys * (k - 1)) bits that you must transfer to the
+ * other end.  You can disable the tail, but it reduces the
+ * performance of the code.
  *
  * However, there is something called "tail biting".  You initialize
  * the state with the last k - 1 bits of the data.  That way, when the
  * state machine finishes, it will be in the same state as the
  * beginning, and though it doesn't perform quite as well as a tail,
- * it's better than no tail.
+ * it's a lot better than no tail.  It requires more work on the
+ * receive side.
  *
- * However, you have the problem on the decode side of knowing what
- * state to start at.  You solve that by running the state machine and
- * starting at zero.  The beginning bits will probably be wrong, but
- * by the end it will be aligned and you can get the final bits.  Then
- * you can re-run the algorithm with the start state set properly from
- * the final bits.  I'm not 100% sure how reliable that is, but it
- * seems to work pretty well.
+ * You have the problem on the decode side of knowing what state to
+ * start at.  You solve that by running the data through the decode
+ * state machine starting at zero.  The beginning bits will probably
+ * be wrong, but by the end it will be aligned and in the right state
+ * Then you can re-run the algorithm with the state set properly from
+ * the first run of data.  I'm not 100% sure how reliable that is, but
+ * it seems to work pretty well.
  *
  * If doing tail biting, set do_tail to false when you allocate the
  * coder.  Grab the last k - 1 bits of the data and put them into the
@@ -196,7 +199,33 @@ void convcode_set_dec_output(struct convcode *ce,
  * the actual data output.  You can feed only the end of the data
  * through on the first iteration, but that doesn't work as reliably.
  */
- 
+
+/*
+ * Soft Decoding
+ *
+ * Soft decoding takes into account how certain (or, in this case,
+ * uncertain) a particular bit is to be correct.  For instance, when
+ * doing phase decoding, if you are right on phase, then you would be
+ * 0% uncertain that the value was incorrect.  If it was half-way
+ * beteen two expected phase values, you would be 50% uncertain the
+ * value was correct.  It's easier to work with uncertainty than
+ * certainty, even if the English is awkward.
+ *
+ * These uncertainty values by default are given in a range from 0 to
+ * 100 but you would never use a value more than 50.  If you were more
+ * than 50% uncertain, you would have chosen the other value, of
+ * course.  You can change the max value with a function described below.
+ *
+ * When using soft decoding, them meaning of num_errs from
+ * convdecode_finish() changes.  It is no longer a count of errors, it
+ * is instead a rating of uncertainty.  You would normally divide this
+ * by the number of bits to get a meaningful uncertainty number for
+ * the data.
+ *
+ * See convdecode_block() for a way to get the full set of
+ * uncertainties for each output bit, for a BCJR type algorithm.
+ */
+
 /*
  * Re-initialization handling.  Note that encoding and decoding may be
  * done simultaneously with the same structure.
@@ -212,49 +241,31 @@ void reinit_convencode(struct convcode *ce);
  * Re-init the decoder.  If you want to use the decoder again
  * after and decode operation, you must reinitialize it.
  *
- * Return non-zero on error
+ * Returns non-zero on error
  */
 int reinit_convdecode(struct convcode *ce);
 
 /*
- * Call both of the the above functions with the defaults.
+ * Call both of the the above functions.
  */
 void reinit_convcode(struct convcode *ce);
 
 /*
- * If set to false (the default) the output for encoding comes out in
- * bytes except for possibly the last output.  If set to true, the
- * output will come out in a symbol, or num_polynomial, number of bits
- * each time, and there will not be a chunk at the end that is smaller.
- * This is useful if you want to split up the individual output streams
- * from each polynomial, like you would for a recursive decoder for
- * turbo coding.
+ * If set to false (the default) the output for encoding goes to the
+ * output function in bytes except for possibly the last output.  If
+ * set to true, the output will come out in a symbol, or
+ * num_polynomial, number of bits each time, and there will not be a
+ * chunk at the end that is smaller.  This is useful if you want to
+ * split up the individual output streams from each polynomial, like
+ * you would for a recursive decoder for turbo coding.
  */
 void set_encode_output_per_symbol(struct convcode *ce, bool val);
 
 /*
- * This is for handling soft decoding.  Soft decoding takes into
- * account how certain (or, in this case, uncertain) a particular bit
- * is to be correct.  For instance, when doing phase decoding, if you
- * are right on phase, then you would be 0% uncertain that the value
- * was incorrect.  If it was half-way beteen two expected phase
- * values, you would be 50% uncertain the value was correct.
- *
  * By default the uncertainty ranges from 0 to 100, where 0 is 100%
  * uncertain and 100 is 0% certain.  This function allows you to set a
  * different max value to range from.  For instance, if you set it to
  * 10 then the values would range from 0 to 10.
- *
- * These uncertainty values are given in a range from 0 to 50; if you
- * were more than 50% uncertain, you would have chosen the other
- * value, of course.
- *
- * When using soft decoding, them meaning of num_errs from
- * convdecode_finish() changes.  It is no longer a count of errors, it
- * is instead a rating of uncertainty.
- *
- * See convdecode_block() for a way to get the full set of
- * uncertainties for each output bit, for a BCJR type algorithm.
  */
 void set_decode_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty);
 
