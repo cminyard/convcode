@@ -177,13 +177,16 @@ void free_convcode(struct convcode *ce);
  *
  * If doing tail biting, set do_tail to false when you allocate the
  * coder.  Grab the last k - 1 bits of the data and put them into the
- * start state parameter, but throw away the output bits from this.
- * Then encode normally.
+ * encoder, but throw away the output bits from this.  Then encode
+ * normally.
  *
  * On the decode side, get the whole packet then feed it through once.
  * This should put the decoder into the same state the encoder was at
- * when it started transmitting data.  Then feed the entire packet
- * through.  Throw away the first half of the data.
+ * when it started transmitting data.  Then call
+ * reinit_convdecode_tail_bite(), which will re-initialize the decoder
+ * but leave the states.  Then feed the entire packet through to get
+ * the actual data output.  You can feed only the end of the data
+ * through on the first iteration, but that doesn't work as reliably.
  */
  
 /*

@@ -72,10 +72,33 @@ reinit_convencode(struct convcode *ce)
     ce->enc_out.total_out_bits = 0;
 }
 
-int
-reinit_convdecode(struct convcode *ce)
+static unsigned int
+get_min_pos(struct convcode *ce)
 {
-    unsigned int i;
+    unsigned int i, cstate, min_val;
+
+    if (ce->trelmap) {
+	/* Minimum value is always at 0 because it's sorted. */
+	cstate = 0;
+	min_val = ce->prev_path_values[0];
+    } else {
+	min_val = ce->prev_path_values[0];
+	cstate = 0;
+	for (i = 1; i < ce->num_states; i++) {
+	    if (ce->prev_path_values[i] < min_val) {
+		cstate = i;
+		min_val = ce->prev_path_values[i];
+	    }
+	}
+    }
+
+    return cstate;
+}
+
+static int
+reinit_convdecode_i(struct convcode *ce, bool tail_bite)
+{
+    unsigned int i, cstate;
 
     if (!ce->prev_path_values)
 	return 1;
@@ -84,31 +107,58 @@ reinit_convdecode(struct convcode *ce)
     ce->dec_out.out_bit_pos = 0;
     ce->dec_out.total_out_bits = 0;
 
-    ce->prev_path_values[CONVCODE_DEFAULT_START_STATE] = 0;
-    if (ce->trelmap)
-	ce->trelmap[CONVCODE_DEFAULT_START_STATE] = CONVCODE_DEFAULT_START_STATE;
-    for (i = 0; i < ce->num_states; i++) {
-	if (i == CONVCODE_DEFAULT_START_STATE) {
-	    if (ce->trelmap)
-		ce->trelmap[i] = 0;
-	} else {
-	    ce->prev_path_values[i] = CONVCODE_DEFAULT_INIT_OTHER_STATES;
-	    if (ce->trelmap)
-		ce->trelmap[i] = CONVCODE_PSTATE_SET_BIT(i, 1);
+    if (tail_bite) {
+	cstate = get_min_pos(ce);
+	if (ce->trelmap)
+	    ce->trelmap[cstate] = 0;
+	ce->prev_path_values[cstate] = 0;
+    } else {
+	ce->prev_path_values[CONVCODE_DEFAULT_START_STATE] = 0;
+	for (i = 0; i < ce->num_states; i++) {
+	    if (i == CONVCODE_DEFAULT_START_STATE) {
+		if (ce->trelmap)
+		    ce->trelmap[i] = 0;
+	    } else {
+		ce->prev_path_values[i] = CONVCODE_DEFAULT_INIT_OTHER_STATES;
+		if (ce->trelmap)
+		    ce->trelmap[i] = CONVCODE_PSTATE_SET_BIT(i, 1);
+	    }
 	}
-    }
-    /*
-     * Set things up so that the trelmap loop in
-     * convdecode_symbol_i() works on the first value without
-     * having to check if it's the first value.
-     */
-    if (ce->tmptrel) {
-	for (i = 0; i < ce->trelw; i++)
-	    ce->tmptrel[i] = 0;
+	/*
+	 * Set things up so that the trelmap loop in
+	 * convdecode_symbol_i() works on the first value without
+	 * having to check if it's the first value.
+	 */
+	if (ce->tmptrel) {
+	    for (i = 0; i < ce->trelw; i++)
+		ce->tmptrel[i] = 0;
+	}
+	for (i = 0; i < ce->num_states; i++) {
+	    if (i == CONVCODE_DEFAULT_START_STATE) {
+		if (ce->trelmap)
+		    ce->trelmap[i] = 0;
+	    } else {
+		ce->prev_path_values[i] = CONVCODE_DEFAULT_INIT_OTHER_STATES;
+		if (ce->trelmap)
+		    ce->trelmap[i] = CONVCODE_PSTATE_SET_BIT(i, 1);
+	    }
+	}
     }
     ce->ctrellis = 0;
     ce->leftover_bits = 0;
     return 0;
+}
+
+int
+reinit_convdecode(struct convcode *ce)
+{
+    return reinit_convdecode_i(ce, false);
+}
+
+int
+reinit_convdecode_tail_bite(struct convcode *ce)
+{
+    return reinit_convdecode_i(ce, true);
 }
 
 void
@@ -1463,20 +1513,8 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 	return rv;
 
     /* Find the minimum value in the final path. */
-    if (ce->trelmap) {
-	/* Minimum value is always at 0 because it's sorted. */
-	cstate = 0;
-	min_val = ce->prev_path_values[0];
-    } else {
-	min_val = ce->prev_path_values[0];
-	cstate = 0;
-	for (i = 1; i < ce->num_states; i++) {
-	    if (ce->prev_path_values[i] < min_val) {
-		cstate = i;
-		min_val = ce->prev_path_values[i];
-	    }
-	}
-    }
+    cstate = get_min_pos(ce);
+    min_val = ce->prev_path_values[cstate];
 
     /* Go backwards through the trellis to find the full path. */
     cuncertainty = min_val;
@@ -2272,23 +2310,6 @@ dummy_convcode_output(struct convcode *ce, void *user_data,
     return 0;
 }
 
-static void
-print_bits(char *str, uint8_t *bits, unsigned int nbits)
-{
-    unsigned int i;
-
-    printf("%s: ", str);
-    for (i = 0; i < nbits; i++) {
-	unsigned int bit = extract_bits(bits, i, 1);
-
-	if (bit)
-	    putchar('1');
-	else
-	    putchar('0');
-    }
-    putchar('\n');
-}
-
 static int
 err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	     unsigned int trellis_width, bool do_tail, bool recursive,
@@ -2301,25 +2322,19 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
     unsigned int i, j;
     unsigned int encoded_size, detected_errors, decode_errors, inserted_errors;
     unsigned int tmp, decode_failures;
-    unsigned int dc_size = size;
     unsigned int byte_size; /* Byte count for data to be encoded. */
-    unsigned int dc_byte_size; /* Byte count for decoded data. */
     unsigned int enc_size; /* Bits require for the encoded data. */
     unsigned int byte_enc_size; /* Byte count for encoded data. */
 
-    if (do_tail_biting) {
+    if (do_tail_biting)
 	do_tail = false;
-	/* We decode twice, so we get twice as many decoded bits. */
-	dc_size *= 2;
-    }
 
     enc_size = convcode_encoded_size(size, num_polys, k, do_tail);
     byte_size = CONVCODE_ROUND_UP_BYTE(size);
-    dc_byte_size = CONVCODE_ROUND_UP_BYTE(dc_size);
     byte_enc_size = CONVCODE_ROUND_UP_BYTE(enc_size);
 
     data = malloc(byte_size);
-    decoded = malloc(dc_byte_size);
+    decoded = malloc(byte_size);
     encoded = malloc(byte_enc_size);
     if (do_uncertainty)
 	uncertainty = malloc(enc_size);
@@ -2327,15 +2342,20 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
     srand(time(NULL));
     normal_dist_size = calc_normal_dist(normal_dist, NORMAL_DIST_ARRAY_SIZE);
 
+    o->bytes_allocated = 0;
     /*
      * Set dummy_convcode_output for tail biting, so the first output
      * bits are ignored.
      */
-    ce = alloc_convcode(o, k, polys, num_polys, dc_size, trellis_width,
+    ce = alloc_convcode(o, k, polys, num_polys, size, trellis_width,
 			do_tail, recursive, do_uncertainty,
 			dummy_convcode_output, NULL, NULL, NULL, NULL, NULL);
 
-    printf("Running injection test with %u loops\n", num_loops);
+    printf("Running injection test with %u loops:%s%s%s\n", num_loops,
+	   recursive ? " recursive" : "",
+	   do_tail_biting ? " tail-biting" : do_tail ? " tail" : "",
+	   do_uncertainty ? " uncertainty" : "");
+    printf("  Used %lu bytes\n", o->bytes_allocated);
     for (inserted_errors = 0; ; inserted_errors++) {
 	decode_errors = 0;
 	detected_errors = 0;
@@ -2349,7 +2369,7 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 
 	    reinit_convcode(ce);
 	    memset(encoded, 0, byte_enc_size);
-	    memset(decoded, 0, dc_byte_size);
+	    memset(decoded, 0, byte_size);
 	    if (do_tail_biting) {
 		/* Shove in the last k - 1 bits) */
 		unsigned int opos = size - (k - 1);
@@ -2373,29 +2393,10 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 		    convdecode_data_u(ce, encoded, encoded_size, uncertainty);
 		else
 		    convdecode_data(ce, encoded, encoded_size);
+		reinit_convdecode_tail_bite(ce);
 	    }
 	    convdecode_block(ce, encoded, encoded_size, uncertainty,
 			     decoded, NULL, &tmp);
-	    if (do_tail_biting) {
-		/* Drop the first half of the data. */
-		unsigned int shift_bits = size * 0;
-		unsigned int shift_bytes = size / 8;
-		unsigned int output_size = byte_size;
-
-		/* Shift over whole bytes first. */
-		if (shift_bytes > 0) {
-		    for (j = 0; j < output_size; j++)
-			decoded[j] = decoded[j + shift_bytes];
-		}
-		/* Now shift over bits. */
-		if (shift_bits > 0) {
-		    for (j = 0; j < output_size; j++) {
-			decoded[j] >>= shift_bits;
-			decoded[j] |= decoded[j + 1] << (8 - shift_bits);
-		    }
-		}
-		/* decoded array should now be size bits long. */
-	    }
 	    detected_errors += tmp;
 
 	    tmp = count_bit_diffs(data, decoded, byte_size);
