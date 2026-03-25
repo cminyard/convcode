@@ -65,6 +65,20 @@ typedef int (*convcode_output)(struct convcode *ce, void *user_data,
 			       unsigned char byte, unsigned int nbits);
 
 /*
+ * Take the number of bits and return the number of bytes required to
+ * hold it.
+ */
+#define CONVCODE_ROUND_UP_BYTE(size) (((size) + 7) / 8)
+
+/*
+ * Take the given parameters and the number of bits to encode and
+ * compute the number of bits required to hold the given encoded
+ * data.
+ */
+unsigned int convcode_encoded_size(unsigned int size, unsigned int num_polys,
+				   unsigned int k, bool do_tail);
+
+/*
  * Allocate a convolutional coder for coding or decoding.
  *
  * k is the constraint (the size of the polynomials in bits).  The
@@ -141,14 +155,14 @@ void free_convcode(struct convcode *ce);
 /*
  * Convolutional tail
  *
- * Normally you have a "tail" of the convolutional code, where you it
- * feeds k - 1 zeros to clear out the state and get the end state and
+ * Normally you have a "tail" of the convolutional code, where you
+ * feed k - 1 zeros to clear out the state and get the end state and
  * initial state the same.  That's normally what you want, so this
  * code does that for you if you set do_tail to true.  You can disable
  * the tail, but it reduces the performance of the code.
  *
  * However, there is something called "tail biting".  You initialize
- * the state to the last k - 1 bits of the data.  That way, when the
+ * the state with the last k - 1 bits of the data.  That way, when the
  * state machine finishes, it will be in the same state as the
  * beginning, and though it doesn't perform quite as well as a tail,
  * it's better than no tail.
@@ -159,47 +173,37 @@ void free_convcode(struct convcode *ce);
  * by the end it will be aligned and you can get the final bits.  Then
  * you can re-run the algorithm with the start state set properly from
  * the final bits.  I'm not 100% sure how reliable that is, but it
- * seems to work pretty well.  The other option is to run it multiple
- * time with starting state from 0 to k-1 and choose the minimum
- * value.
+ * seems to work pretty well.
  *
  * If doing tail biting, set do_tail to false when you allocate the
- * coder.  You must then use the reinit_convencode() set the start
- * value for encoding.  Grab the last k - 1 bits of the data and put
- * them into the start state parameter.
+ * coder.  Grab the last k - 1 bits of the data and put them into the
+ * start state parameter, but throw away the output bits from this.
+ * Then encode normally.
  *
- * On the decode side, first run with the start_state to 0 and
- * init_other_paths to a smaller number like 256.  Then determine the
- * last bits and use those for start_state and
- * CONVCODE_DEFAULT_INIT_VAL for init_other_states.
+ * On the decode side, get the whole packet then feed it through once.
+ * This should put the decoder into the same state the encoder was at
+ * when it started transmitting data.  Then feed the entire packet
+ * through.  Throw away the first half of the data.
+ */
+ 
+/*
+ * Re-initialization handling.  Note that encoding and decoding may be
+ * done simultaneously with the same structure.
  */
 
 /*
- * For calling the reinit functions, use these unless you are using tail
- * biting.
+ * Reinit the encoder.  If you want to use the encoder again
+ * after and encode operation, you must reinitialize it.
  */
-#define CONVCODE_DEFAULT_START_STATE 0
-#define CONVCODE_DEFAULT_INIT_VAL (UINT_MAX / 2)
+void reinit_convencode(struct convcode *ce);
 
 /*
- * Reinit the encoder or decoder.  If you want to use the coder again
- * after and encode or decode operation, you must reinitialize the
- * part you are using.  Encoding and decoding may be done
- * simultaneously with the same structure.
- */
-void reinit_convencode(struct convcode *ce, unsigned int start_state);
-
-/*
- * The decoder takes a couple of parameters.
+ * Re-init the decoder.  If you want to use the decoder again
+ * after and decode operation, you must reinitialize it.
  *
- * For use of start_state and init_other_states, see the discussion of
- * tails above.  If you aren't doing tail biting, use the defaults
- * defined above.
- *
- * Returns nonzero on an error.
+ * Return non-zero on error
  */
-int reinit_convdecode(struct convcode *ce, unsigned int start_state,
-		      unsigned int init_other_states);
+int reinit_convdecode(struct convcode *ce);
 
 /*
  * Call both of the the above functions with the defaults.
@@ -373,6 +377,9 @@ int convdecode_data_u(struct convcode *ce,
  * will be returned here.  This will also return 1 if the data exceeds
  * the available size given in max_decode_len_bits above.
  *
+ * You cannot use this to get output uncertainties.  Use the
+ * convdecode_block() function below for that.
+ *
  * Returns nonzero on an error.
  */
 int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
@@ -382,6 +389,11 @@ int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  * Much like convdecode_data() and convdecode_finish(), but does a
  * full block all at once and does not use the output function.  See
  * convdecode_data for an explaination of the first four parameters.
+ *
+ * Note that you can feed data into the decoder using
+ * convdecode_symbol() and/or convdecode_data() before calling this
+ * function.  You can also use this instead of convdecode_final() to
+ * get the output in a block and get output uncertainties.
  *
  * The output data is stored in outbits, in the normal bit format
  * everything else uses.  With a tail, the output array must be at

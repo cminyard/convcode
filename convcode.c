@@ -50,53 +50,63 @@ set_trellis_entry(struct convcode *ce, unsigned int column, unsigned int row,
     get_trellis_column(ce, column)[row] = val;
 }
 
-void
-reinit_convencode(struct convcode *ce, unsigned int start_state)
+unsigned int
+convcode_encoded_size(unsigned int size, unsigned int num_polys, unsigned int k,
+		      bool do_tail)
 {
-    ce->enc_state = start_state;
+    size *= num_polys;
+    if (do_tail)
+	size += num_polys * (k - 1);
+    return size;
+}
+
+#define CONVCODE_DEFAULT_START_STATE 0
+#define CONVCODE_DEFAULT_INIT_OTHER_STATES (UINT_MAX / 2)
+
+void
+reinit_convencode(struct convcode *ce)
+{
+    ce->enc_state = CONVCODE_DEFAULT_START_STATE;
     ce->enc_out.out_bits = 0;
     ce->enc_out.out_bit_pos = 0;
     ce->enc_out.total_out_bits = 0;
 }
 
 int
-reinit_convdecode(struct convcode *ce, unsigned int start_state,
-		  unsigned int init_other_states)
+reinit_convdecode(struct convcode *ce)
 {
     unsigned int i;
 
-    if (start_state >= ce->num_states)
+    if (!ce->prev_path_values)
 	return 1;
 
     ce->dec_out.out_bits = 0;
     ce->dec_out.out_bit_pos = 0;
     ce->dec_out.total_out_bits = 0;
 
-    if (ce->num_states > 0) {
-	ce->prev_path_values[start_state] = 0;
-	if (ce->trelmap)
-	    ce->trelmap[start_state] = start_state;
-	for (i = 0; i < ce->num_states; i++) {
-	    if (i == start_state) {
-		if (ce->trelmap)
-		    ce->trelmap[i] = 0;
-	    } else {
-		ce->prev_path_values[i] = init_other_states;
-		if (ce->trelmap)
-		    ce->trelmap[i] = CONVCODE_PSTATE_SET_BIT(i, 1);
-	    }
+    ce->prev_path_values[CONVCODE_DEFAULT_START_STATE] = 0;
+    if (ce->trelmap)
+	ce->trelmap[CONVCODE_DEFAULT_START_STATE] = CONVCODE_DEFAULT_START_STATE;
+    for (i = 0; i < ce->num_states; i++) {
+	if (i == CONVCODE_DEFAULT_START_STATE) {
+	    if (ce->trelmap)
+		ce->trelmap[i] = 0;
+	} else {
+	    ce->prev_path_values[i] = CONVCODE_DEFAULT_INIT_OTHER_STATES;
+	    if (ce->trelmap)
+		ce->trelmap[i] = CONVCODE_PSTATE_SET_BIT(i, 1);
 	}
-	/*
-	 * Set things up so that the trelmap loop in
-	 * convdecode_symbol_i() works on the first value without
-	 * having to check if it's the first value.
-	 */
-	if (ce->tmptrel) {
-	    for (i = 0; i < ce->trelw; i++)
-		ce->tmptrel[i] = 0;
-	}
-	ce->ctrellis = 0;
     }
+    /*
+     * Set things up so that the trelmap loop in
+     * convdecode_symbol_i() works on the first value without
+     * having to check if it's the first value.
+     */
+    if (ce->tmptrel) {
+	for (i = 0; i < ce->trelw; i++)
+	    ce->tmptrel[i] = 0;
+    }
+    ce->ctrellis = 0;
     ce->leftover_bits = 0;
     return 0;
 }
@@ -104,10 +114,9 @@ reinit_convdecode(struct convcode *ce, unsigned int start_state,
 void
 reinit_convcode(struct convcode *ce)
 {
-    reinit_convencode(ce, CONVCODE_DEFAULT_START_STATE);
+    reinit_convencode(ce);
     if (ce->prev_path_values)
-	reinit_convdecode(ce, CONVCODE_DEFAULT_START_STATE,
-			  CONVCODE_DEFAULT_INIT_VAL);
+	reinit_convdecode(ce);
 }
 
 /*
@@ -1558,7 +1567,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *
  * To supply your own input and output, run as:
  *
- * ./convcode [-t] [-j] [-g] [-u] [-m <size>] [-l <loops] [-x]
+ * ./convcode [-t] [-j] [-g] [-u] [-b] [-m <size>] [-l <loops] [-x]
  *        [-w <trellis width>]
  *        [-s <start state>] [-i <init_val>]
  *        -p <poly1> [ -p <poly2> ... ] k <bits>
@@ -1572,14 +1581,9 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *
  * The -g option output coding tables, more on that later.
  *
- * The -u, -l, and -m options only work with -j, see that section below.
+ * The -u, -l, -b, and -m options only work with -j, see that section below.
  *
  * The -w option sets the trellis width.  Default is 0, or 2 ^ (K - 1).
- *
- * The -s and -i options set the start state of the encoder/decoder,
- * and for decoding the init value for the probability matrix for
- * values besides the start state.  See the discussion on tails in
- * convcode.h for detail.
  *
  * For instance, to decode some data with the Voyager coder, do:
  *
@@ -1621,6 +1625,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *    -w - Set the trellis width.  Default is 0, or 2 ^ (K - 1).
  *    -l - The number of loops.  Default is 100.
  *    -x - Disable the tail.
+ *    -b - Do tail biting.
  *    -r - Do recursive.
  *    -m - Set the buffer size to encode.  Defaults to 256 bits (32 bytes).
  *    -u - Do uncertainty.
@@ -2261,32 +2266,74 @@ insert_random_errors(uint8_t *data, unsigned int size, unsigned int count,
 }
 
 static int
+dummy_convcode_output(struct convcode *ce, void *user_data,
+		      unsigned char byte, unsigned int nbits)
+{
+    return 0;
+}
+
+static void
+print_bits(char *str, uint8_t *bits, unsigned int nbits)
+{
+    unsigned int i;
+
+    printf("%s: ", str);
+    for (i = 0; i < nbits; i++) {
+	unsigned int bit = extract_bits(bits, i, 1);
+
+	if (bit)
+	    putchar('1');
+	else
+	    putchar('0');
+    }
+    putchar('\n');
+}
+
+static int
 err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	     unsigned int trellis_width, bool do_tail, bool recursive,
-	     bool do_uncertainty, unsigned int num_loops, unsigned int size)
+	     bool do_uncertainty, bool do_tail_biting,
+	     unsigned int num_loops, unsigned int size)
 {
     /* NOTE: size is in bits. */
     struct convcode *ce;
-    uint8_t *data, *decoded, *encoded, *uncertainty;
+    uint8_t *data, *decoded, *encoded, *uncertainty = NULL;
     unsigned int i, j;
     unsigned int encoded_size, detected_errors, decode_errors, inserted_errors;
     unsigned int tmp, decode_failures;
-    /* Byte count for decoded data. */
-    unsigned int byte_size = (size + 7) / 8;
-    /* Byte count for encoded data. */
-    unsigned int byte_enc_size = (ENCODED_SIZE(size) + 7) / 8;
+    unsigned int dc_size = size;
+    unsigned int byte_size; /* Byte count for data to be encoded. */
+    unsigned int dc_byte_size; /* Byte count for decoded data. */
+    unsigned int enc_size; /* Bits require for the encoded data. */
+    unsigned int byte_enc_size; /* Byte count for encoded data. */
+
+    if (do_tail_biting) {
+	do_tail = false;
+	/* We decode twice, so we get twice as many decoded bits. */
+	dc_size *= 2;
+    }
+
+    enc_size = convcode_encoded_size(size, num_polys, k, do_tail);
+    byte_size = CONVCODE_ROUND_UP_BYTE(size);
+    dc_byte_size = CONVCODE_ROUND_UP_BYTE(dc_size);
+    byte_enc_size = CONVCODE_ROUND_UP_BYTE(enc_size);
 
     data = malloc(byte_size);
-    decoded = malloc(byte_size);
+    decoded = malloc(dc_byte_size);
     encoded = malloc(byte_enc_size);
-    uncertainty = malloc(ENCODED_SIZE(size));
+    if (do_uncertainty)
+	uncertainty = malloc(enc_size);
 
     srand(time(NULL));
     normal_dist_size = calc_normal_dist(normal_dist, NORMAL_DIST_ARRAY_SIZE);
 
-    ce = alloc_convcode(o, k, polys, num_polys, size, trellis_width,
+    /*
+     * Set dummy_convcode_output for tail biting, so the first output
+     * bits are ignored.
+     */
+    ce = alloc_convcode(o, k, polys, num_polys, dc_size, trellis_width,
 			do_tail, recursive, do_uncertainty,
-			NULL, NULL, NULL, NULL, NULL, NULL);
+			dummy_convcode_output, NULL, NULL, NULL, NULL, NULL);
 
     printf("Running injection test with %u loops\n", num_loops);
     for (inserted_errors = 0; ; inserted_errors++) {
@@ -2299,21 +2346,55 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	    /* Make the last bits zero if size is not a multiple of 8. */
 	    if (size % 8)
 		data[j - 1] >>= 8 - size % 8;
+
 	    reinit_convcode(ce);
 	    memset(encoded, 0, byte_enc_size);
-	    memset(decoded, 0, byte_size);
+	    memset(decoded, 0, dc_byte_size);
+	    if (do_tail_biting) {
+		/* Shove in the last k - 1 bits) */
+		unsigned int opos = size - (k - 1);
+
+		for (j = 0; j < k - 1; j++) {
+		    unsigned int bit = extract_bits(data, opos, 1);
+
+		    opos++;
+		    /* Output data will be discarded. */
+		    convencode_bit(ce, bit);
+		}
+	    }
 	    convencode_block(ce, data, size, encoded, &encoded_size);
-	    if (do_uncertainty) {
+	    if (uncertainty)
 		setup_uncertainty(uncertainty, encoded_size);
-		insert_random_errors(encoded, encoded_size, inserted_errors,
-				     uncertainty);
-		convdecode_block(ce, encoded, encoded_size, uncertainty,
-				 decoded, NULL, &tmp);
-	    } else {
-		insert_random_errors(encoded, encoded_size, inserted_errors,
-				     NULL);
-		convdecode_block(ce, encoded, encoded_size, NULL,
-				 decoded, NULL, &tmp);
+	    insert_random_errors(encoded, encoded_size, inserted_errors,
+				 uncertainty);
+	    if (do_tail_biting) {
+		/* Shove in the first run of the data. */
+		if (uncertainty)
+		    convdecode_data_u(ce, encoded, encoded_size, uncertainty);
+		else
+		    convdecode_data(ce, encoded, encoded_size);
+	    }
+	    convdecode_block(ce, encoded, encoded_size, uncertainty,
+			     decoded, NULL, &tmp);
+	    if (do_tail_biting) {
+		/* Drop the first half of the data. */
+		unsigned int shift_bits = size * 0;
+		unsigned int shift_bytes = size / 8;
+		unsigned int output_size = byte_size;
+
+		/* Shift over whole bytes first. */
+		if (shift_bytes > 0) {
+		    for (j = 0; j < output_size; j++)
+			decoded[j] = decoded[j + shift_bytes];
+		}
+		/* Now shift over bits. */
+		if (shift_bits > 0) {
+		    for (j = 0; j < output_size; j++) {
+			decoded[j] >>= shift_bits;
+			decoded[j] |= decoded[j + 1] << (8 - shift_bits);
+		    }
+		}
+		/* decoded array should now be size bits long. */
 	    }
 	    detected_errors += tmp;
 
@@ -2407,8 +2488,8 @@ main(int argc, char *argv[])
     unsigned int arg, total_bits, num_errs = 0;
     bool decode = false, test = false, do_tail = true, recursive = false;
     bool gen_tables = false, do_err_inj_test = false, do_uncertainty = false;
+    bool do_tail_biting = false;
     unsigned int err_inj_loops = 100, err_inj_size = RAND_TEST_SIZE;
-    unsigned int start_state = 0, init_val = CONVCODE_DEFAULT_INIT_VAL;
     convcode_state trellis_width = 0;
 
     for (arg = 1; arg < argc; arg++) {
@@ -2422,6 +2503,8 @@ main(int argc, char *argv[])
 	    test = true;
 	} else if (strcmp(argv[arg], "-x") == 0) {
 	    do_tail = false;
+	} else if (strcmp(argv[arg], "-b") == 0) {
+	    do_tail_biting = true;
 	} else if (strcmp(argv[arg], "-r") == 0) {
 	    recursive = true;
 	} else if (strcmp(argv[arg], "-g") == 0) {
@@ -2430,13 +2513,6 @@ main(int argc, char *argv[])
 	    do_err_inj_test = true;
 	} else if (strcmp(argv[arg], "-u") == 0) {
 	    do_uncertainty = true;
-	} else if (strcmp(argv[arg], "-s") == 0) {
-	    arg++;
-	    if (arg >= argc) {
-		fprintf(stderr, "No data supplied for -s\n");
-		return 1;
-	    }
-	    start_state = strtoul(argv[arg], NULL, 0);
 	} else if (strcmp(argv[arg], "-w") == 0) {
 	    arg++;
 	    if (arg >= argc) {
@@ -2444,13 +2520,6 @@ main(int argc, char *argv[])
 		return 1;
 	    }
 	    trellis_width = strtoul(argv[arg], NULL, 0);
-	} else if (strcmp(argv[arg], "-i") == 0) {
-	    arg++;
-	    if (arg >= argc) {
-		fprintf(stderr, "No data supplied for -i\n");
-		return 1;
-	    }
-	    init_val = strtoul(argv[arg], NULL, 0);
 	} else if (strcmp(argv[arg], "-p") == 0) {
 	    if (num_polys == CONVCODE_MAX_POLYNOMIALS) {
 		fprintf(stderr, "Too many polynomials\n");
@@ -2504,7 +2573,7 @@ main(int argc, char *argv[])
 
     if (do_err_inj_test)
 	return err_inj_test(k, polys, num_polys, trellis_width,
-			    do_tail, recursive, do_uncertainty,
+			    do_tail, recursive, do_uncertainty, do_tail_biting,
 			    err_inj_loops, err_inj_size);
 
     if (decode && arg < argc) {
@@ -2517,10 +2586,6 @@ main(int argc, char *argv[])
 			do_tail, recursive, false,
 			handle_output, NULL,
 			handle_output, NULL, NULL, NULL);
-    if (start_state)
-	reinit_convencode(ce, start_state);
-    if (!decode && (start_state || init_val != CONVCODE_DEFAULT_INIT_VAL))
-	reinit_convdecode(ce, start_state, init_val);
 
     if (gen_tables) {
 	output_tables(ce);
