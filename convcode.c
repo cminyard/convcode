@@ -1607,13 +1607,19 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *
  * The output is:
  *
- *   Inj 17, detected_errs: 1676, decode_errs: 16, failures: 1 (1.00%)
+ *   Inj 17, detected_errs: 16722 (16.72), decode_errs: 31 (0.03), failures: 8 (0.80%)
  *
- * Where Inj is the number of errors injected in each loop iteraction,
- * detected_errs is to total detected errors in all loops, decode_errs
- * is the total actual bits that were wrong after decode in all loops,
- * and failures is the total number of messages that were incorrect,
- * along with a percentage of decodes that failed.
+ * Where:
+ *   Inj - the number of errors injected in each loop iteraction.
+ *
+ *   detected_errs - the total detected errors in all loops followed by
+ *      the average per iteractionl
+ *
+ *   decode_errs - the total actual bits that were wrong after decode in
+ *      all loops followed by the average per iteration.
+ *
+ *   failures - the total number of messages that were incorrect, along
+ *      with a percentage of decodes that failed.
  *
  * If you enable uncertainty, it will do a semi-normal distribution of
  * uncertainty, weighted towards 0 for good data and weighted towards
@@ -2283,15 +2289,20 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 		decode_failures++;
 	}
 	if (do_uncertainty) {
-	    unsigned int div = num_loops * RAND_TEST_SIZE;
-	    detected_errors = (detected_errors + div / 2) / div;
-	    printf("Inj %u, uncertainty: %u, decode_errs: %u, failures: %u (%.2f%%)\n",
-		   inserted_errors, detected_errors, decode_errors,
+	    printf("Inj %u, uncertainty: %.2f, decode_errs: %u (%.2f), failures: %u (%.2f%%)\n",
+		   inserted_errors,
+		   ((float) detected_errors / (num_loops * RAND_TEST_SIZE)),
+		   decode_errors,
+		   ((float) decode_errors / num_loops),
 		   decode_failures,
 		   ((float) decode_failures * 100 / num_loops));
 	} else {
-	    printf("Inj %u, detected_errs: %u, decode_errs: %u, failures: %u (%.2f%%)\n",
-		   inserted_errors, detected_errors, decode_errors,
+	    printf("Inj %u, detected_errs: %u (%.2f), decode_errs: %u (%.2f), failures: %u (%.2f%%)\n",
+		   inserted_errors,
+		   detected_errors,
+		   ((float) detected_errors / num_loops),
+		   decode_errors,
+		   ((float) decode_errors / num_loops),
 		   decode_failures,
 		   ((float) decode_failures * 100 / num_loops));
 	}
