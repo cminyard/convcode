@@ -8,6 +8,12 @@ unfortunately, I had to write one.
 
 To avoid others having the same problem, I've uploaded mine.
 
+This is a production-quality library with high performance and good
+usability.  It also has ways to let you play with various parameters
+and see how they perform.  If you compile this for this, compile for
+tests (see below) you get a program that lets you play with various
+parameters to see how the coder performs.
+
 The API is described in the convcode.h file.
 
 This supports tail-biting, soft decoding, partial trellis, recursive
@@ -46,9 +52,11 @@ a 7-bit k and
 
 You can save space at the expense of performance by using a partial
 trellis.  See the discussion of the trellis\_width parameter to
-alloc\_convcode() for details.
+alloc\_convcode() for details.  This reduced performance.
 
-You can also code in blocks so shorten.
+You can also code in blocks.  This shortens the trellis and so reduce
+the amount of memory used.  It does add a tail to each block unless
+you do no tail or tail biting.
 
 ## Fixed Implementations
 

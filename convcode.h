@@ -152,6 +152,14 @@ struct convcode *alloc_convcode(convcode_os_funcs *o,
  */
 void free_convcode(struct convcode *ce);
 
+/* Change the encode and decoder output functions. */
+void convcode_set_enc_output(struct convcode *ce,
+			     convcode_output enc_output,
+			     void *enc_out_user_data);
+void convcode_set_dec_output(struct convcode *ce,
+			     convcode_output dec_output,
+			     void *dec_out_user_data);
+
 /*
  * Convolutional tail
  *

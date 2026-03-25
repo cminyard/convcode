@@ -515,6 +515,24 @@ alloc_convcode(convcode_os_funcs *o,
 }
 
 void
+convcode_set_enc_output(struct convcode *ce,
+			convcode_output enc_output,
+			void *enc_out_user_data)
+{
+    ce->enc_out.output = enc_output;
+    ce->enc_out.user_data = enc_out_user_data;
+}
+
+void
+convcode_set_dec_output(struct convcode *ce,
+			convcode_output dec_output,
+			void *dec_out_user_data)
+{
+    ce->dec_out.output = dec_output;
+    ce->dec_out.user_data = dec_out_user_data;
+}
+
+void
 set_decode_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty)
 {
     ce->uncertainty_100 = max_uncertainty;
