@@ -54,7 +54,7 @@ You can also code in blocks so shorten.
 
 If you want your tables to not be dynamically allocated so you can put
 them in FLASH or something like that, it's possible.  See the
-discussion on the convert and next\_state parameters to
+discussion in convcode.h on the convert and next\_state parameters to
 alloc\_convcode().
 
 ## Memory allocation

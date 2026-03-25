@@ -1605,10 +1605,23 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *    -u - Do uncertainty.
  * All other options are ignored.
  *
+ * The output is:
+ *
+ *   Inj 17, detected_errs: 1676, decode_errs: 16, failures: 1 (1.00%)
+ *
+ * Where Inj is the number of errors injected in each loop iteraction,
+ * detected_errs is to total detected errors in all loops, decode_errs
+ * is the total actual bits that were wrong after decode in all loops,
+ * and failures is the total number of messages that were incorrect,
+ * along with a percentage of decodes that failed.
+ *
  * If you enable uncertainty, it will do a semi-normal distribution of
  * uncertainty, weighted towards 0 for good data and weighted towards
  * 50 for injected errors.  Uncertainty does an amazing job of improving
  * the performance.
+ *
+ * If you enable uncertainty, the detected errors is no longer a count
+ * of errors, it is instead a measure of uncertainty
  */
 
 #include <stdio.h>
@@ -2269,9 +2282,19 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	    if (tmp > 0)
 		decode_failures++;
 	}
-	printf("Inj %u, detected_errs: %u, decode_errs: %u, failures: %u\n",
-	       inserted_errors, detected_errors, decode_errors,
-	       decode_failures);
+	if (do_uncertainty) {
+	    unsigned int div = num_loops * RAND_TEST_SIZE;
+	    detected_errors = (detected_errors + div / 2) / div;
+	    printf("Inj %u, uncertainty: %u, decode_errs: %u, failures: %u (%.2f%%)\n",
+		   inserted_errors, detected_errors, decode_errors,
+		   decode_failures,
+		   ((float) decode_failures * 100 / num_loops));
+	} else {
+	    printf("Inj %u, detected_errs: %u, decode_errs: %u, failures: %u (%.2f%%)\n",
+		   inserted_errors, detected_errors, decode_errors,
+		   decode_failures,
+		   ((float) decode_failures * 100 / num_loops));
+	}
 	if (decode_failures >= num_loops)
 	    break;
     }
