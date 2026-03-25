@@ -7,6 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define CONVCODE_DEBUG_ASSERT 1
+#if CONVCODE_DEBUG_ASSERT
+#include <assert.h>
+#define DEBUG_ASSERT(x) assert(x)
+#else
+#define DEBUG_ASSERT(x) do {} while(0)
+#endif
+
 #include "convcode_os_funcs.h"
 #include "convcode.h"
 
@@ -14,7 +22,6 @@
 
 #if CONVCODE_DEBUG_STATES
 #include <stdio.h>
-#include <assert.h>
 #endif
 
 #define FORCE_INLINE __attribute__((always_inline))
@@ -268,8 +275,14 @@ setup_convcode2(struct convcode *ce)
 {
     unsigned int val, i, j;
     convcode_state state_mask = ce->num_states - 1;
-    convcode_symsize **conv = (convcode_symsize **) ce->convert;
-    convcode_state **next_state = (convcode_state **) ce->next_state;
+    /*
+     * Convert and next_state are read-only, but if allocated we need to
+     * fill them in.
+     */
+    convcode_symsize *conv[2] = { (convcode_symsize *) ce->convert[0],
+				  (convcode_symsize *) ce->convert[1] };
+    convcode_state *next_state[2] = { (convcode_state *) ce->next_state[0],
+				      (convcode_state *) ce->next_state[1] };
 
     if (!ce->states_alloced)
 	/* Tables were passed in. */
@@ -579,6 +592,8 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
     unsigned int nbytebits = 8 - outbitpos;
 
     /* Next state */
+    DEBUG_ASSERT(bit < 2);
+    DEBUG_ASSERT(state < ce->num_states);
     ce->enc_state = ce->next_state[bit][state];
 
     /* Get the bits to send in the bottom bits of outbits. */
@@ -757,7 +772,7 @@ get_prev_bit(struct convcode *ce, bool do_recursive,
 	return 1;
     else {
 	printf("ERR!: %x %x\n", pstate, cstate);
-	assert(0);
+	DEBUG_ASSERT(0);
     }
     return 0;
 #endif
@@ -881,10 +896,14 @@ decode_one_state(struct convcode *ce, unsigned int i, convcode_symsize symbol,
      */
     dist1 = prevp[pstate1];
     bit1 = get_prev_bit(ce, do_recursive, pstate1, i);
+    DEBUG_ASSERT(bit1 < 2);
+    DEBUG_ASSERT(pstate1 < ce->num_states);
     dist1 += hamming_distance(ce, ce->convert[bit1][pstate1], symbol,
 			      do_uncertainty, uncertainty);
     dist2 = prevp[pstate2];
     bit2 = get_prev_bit(ce, do_recursive, pstate2, i);
+    DEBUG_ASSERT(bit2 < 2);
+    DEBUG_ASSERT(pstate2 < ce->num_states);
     dist2 += hamming_distance(ce, ce->convert[bit2][pstate2], symbol,
 			      do_uncertainty, uncertainty);
 
@@ -924,7 +943,7 @@ convdecode_symbol_i(struct convcode *ce, convcode_symsize symbol,
     convcode_state *trel;
 
 #if CONVCODE_DEBUG_STATES
-    assert(ce->ctrellis + ce->num_polys < ce->trellis_size);
+    DEBUG_ASSERT(ce->ctrellis + ce->num_polys < ce->trellis_size);
 #endif
 
     /*
@@ -1339,7 +1358,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 	bit = CONVCODE_PSTATE_BIT(pstate);
 	pstate = CONVCODE_PSTATE_VAL(pstate);
 #if CONVCODE_DEBUG_STATES
-	assert(pstate < ce->trelw);
+	DEBUG_ASSERT(pstate < ce->trelw);
 #endif
 
 	/*
@@ -1389,7 +1408,7 @@ backwards_one_level(struct convcode *ce, const unsigned char *bytes,
     bit = CONVCODE_PSTATE_BIT(pstate);
     pstate = CONVCODE_PSTATE_VAL(pstate);
 #if CONVCODE_DEBUG_STATES
-    assert(pstate < ce->trelw);
+    DEBUG_ASSERT(pstate < ce->trelw);
 #endif
 
     /*
@@ -1539,7 +1558,8 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *
  * To supply your own input and output, run as:
  *
- * ./convcode [-t] [-j] [-g] [-u] [-l <loops] [-x] [-w <trellis width>]
+ * ./convcode [-t] [-j] [-g] [-u] [-m <size>] [-l <loops] [-x]
+ *        [-w <trellis width>]
  *        [-s <start state>] [-i <init_val>]
  *        -p <poly1> [ -p <poly2> ... ] k <bits>
  *
@@ -1552,7 +1572,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *
  * The -g option output coding tables, more on that later.
  *
- * The -u and -l option only work with -j, see that section below.
+ * The -u, -l, and -m options only work with -j, see that section below.
  *
  * The -w option sets the trellis width.  Default is 0, or 2 ^ (K - 1).
  *
@@ -1602,6 +1622,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *    -l - The number of loops.  Default is 100.
  *    -x - Disable the tail.
  *    -r - Do recursive.
+ *    -m - Set the buffer size to encode.  Defaults to 256 bits (32 bytes).
  *    -u - Do uncertainty.
  * All other options are ignored.
  *
@@ -1627,7 +1648,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  * the performance.
  *
  * If you enable uncertainty, the detected errors is no longer a count
- * of errors, it is instead a measure of uncertainty
+ * of errors, it is instead a measure of average uncertainty per decode.
  */
 
 #include <stdio.h>
@@ -1709,11 +1730,13 @@ do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
 #define RAND_TEST_SIZE (256)
 #define MAX_TEST_POLYS 7
 #define MAX_TAIL (MAX_TEST_POLYS * (CONVCODE_MAX_K - 1))
+#define ENCODED_SIZE(size) ((size) * MAX_TEST_POLYS + MAX_TAIL)
+#define RAND_TEST_MAX_DECODE_SIZE ENCODED_SIZE(RAND_TEST_SIZE)
 struct test_data {
-    char output[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
-    unsigned char enc_bytes[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
-    unsigned char dec_bytes[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
-    unsigned int uncertainties[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
+    char output[RAND_TEST_MAX_DECODE_SIZE + 1];
+    unsigned char enc_bytes[RAND_TEST_MAX_DECODE_SIZE + 1];
+    unsigned char dec_bytes[RAND_TEST_MAX_DECODE_SIZE + 1];
+    unsigned int uncertainties[RAND_TEST_MAX_DECODE_SIZE + 1];
     unsigned int outpos;
 };
 
@@ -1725,7 +1748,7 @@ handle_test_output(struct convcode *ce, void *output_data, unsigned char byte,
     unsigned int i;
 
     for (i = 0; i < nbits; i++) {
-	assert(t->outpos < sizeof(t->output) - 1);
+	DEBUG_ASSERT(t->outpos < sizeof(t->output) - 1);
 	if (byte & 1)
 	    t->output[t->outpos++] = '1';
 	else
@@ -1911,7 +1934,7 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     struct convcode *ce;
     unsigned int i, j, bit, total_bits, num_errs, rv = 0;
     char decoded[RAND_TEST_SIZE + 1];
-    char encoded[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL + 1];
+    char encoded[RAND_TEST_MAX_DECODE_SIZE + 1];
     unsigned int len;
 
     len = RAND_TEST_SIZE;
@@ -2223,7 +2246,7 @@ insert_random_errors(uint8_t *data, unsigned int size, unsigned int count,
 		     uint8_t *uncertainty)
 {
     unsigned int i, pos;
-    bool err_pos[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL] = { 0 };
+    bool err_pos[RAND_TEST_MAX_DECODE_SIZE] = { 0 };
 
     for (i = 0; i < count; i++) {
 	pos = rand() % size;
@@ -2240,20 +2263,28 @@ insert_random_errors(uint8_t *data, unsigned int size, unsigned int count,
 static int
 err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	     unsigned int trellis_width, bool do_tail, bool recursive,
-	     bool do_uncertainty, unsigned int num_loops)
+	     bool do_uncertainty, unsigned int num_loops, unsigned int size)
 {
+    /* NOTE: size is in bits. */
     struct convcode *ce;
-    uint8_t data[RAND_TEST_SIZE / 8], decoded[RAND_TEST_SIZE / 8];
-    uint8_t encoded[(RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL) / 8];
-    uint8_t uncertainty[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL];
+    uint8_t *data, *decoded, *encoded, *uncertainty;
     unsigned int i, j;
     unsigned int encoded_size, detected_errors, decode_errors, inserted_errors;
     unsigned int tmp, decode_failures;
+    /* Byte count for decoded data. */
+    unsigned int byte_size = (size + 7) / 8;
+    /* Byte count for encoded data. */
+    unsigned int byte_enc_size = (ENCODED_SIZE(size) + 7) / 8;
+
+    data = malloc(byte_size);
+    decoded = malloc(byte_size);
+    encoded = malloc(byte_enc_size);
+    uncertainty = malloc(ENCODED_SIZE(size));
 
     srand(time(NULL));
     normal_dist_size = calc_normal_dist(normal_dist, NORMAL_DIST_ARRAY_SIZE);
 
-    ce = alloc_convcode(o, k, polys, num_polys, RAND_TEST_SIZE, trellis_width,
+    ce = alloc_convcode(o, k, polys, num_polys, size, trellis_width,
 			do_tail, recursive, do_uncertainty,
 			NULL, NULL, NULL, NULL, NULL, NULL);
 
@@ -2263,12 +2294,15 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	detected_errors = 0;
 	decode_failures = 0;
 	for (i = 0; i < num_loops; i++) {
-	    for (j = 0; j < sizeof(decoded); j++)
+	    for (j = 0; j < byte_size; j++)
 		data[j] = rand();
+	    /* Make the last bits zero if size is not a multiple of 8. */
+	    if (size % 8)
+		data[j - 1] >>= 8 - size % 8;
 	    reinit_convcode(ce);
-	    memset(encoded, 0, sizeof(encoded));
-	    memset(decoded, 0, sizeof(decoded));
-	    convencode_block(ce, data, RAND_TEST_SIZE, encoded, &encoded_size);
+	    memset(encoded, 0, byte_enc_size);
+	    memset(decoded, 0, byte_size);
+	    convencode_block(ce, data, size, encoded, &encoded_size);
 	    if (do_uncertainty) {
 		setup_uncertainty(uncertainty, encoded_size);
 		insert_random_errors(encoded, encoded_size, inserted_errors,
@@ -2283,7 +2317,7 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	    }
 	    detected_errors += tmp;
 
-	    tmp = count_bit_diffs(data, decoded, sizeof(data));
+	    tmp = count_bit_diffs(data, decoded, byte_size);
 	    decode_errors += tmp;
 	    if (tmp > 0)
 		decode_failures++;
@@ -2311,6 +2345,10 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
     }
 
     free_convcode(ce);
+    free(data);
+    free(decoded);
+    free(encoded);
+    free(uncertainty);
 
     return 0;
 }
@@ -2369,7 +2407,7 @@ main(int argc, char *argv[])
     unsigned int arg, total_bits, num_errs = 0;
     bool decode = false, test = false, do_tail = true, recursive = false;
     bool gen_tables = false, do_err_inj_test = false, do_uncertainty = false;
-    unsigned int err_inj_loops = 100;
+    unsigned int err_inj_loops = 100, err_inj_size = RAND_TEST_SIZE;
     unsigned int start_state = 0, init_val = CONVCODE_DEFAULT_INIT_VAL;
     convcode_state trellis_width = 0;
 
@@ -2431,6 +2469,13 @@ main(int argc, char *argv[])
 		return 1;
 	    }
 	    err_inj_loops = strtoul(argv[arg], NULL, 0);
+	} else if (strcmp(argv[arg], "-m") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -m\n");
+		return 1;
+	    }
+	    err_inj_size = strtoul(argv[arg], NULL, 0);
 	} else {
 	    fprintf(stderr, "unknown option: %s\n", argv[arg]);
 	    return 1;
@@ -2460,7 +2505,7 @@ main(int argc, char *argv[])
     if (do_err_inj_test)
 	return err_inj_test(k, polys, num_polys, trellis_width,
 			    do_tail, recursive, do_uncertainty,
-			    err_inj_loops);
+			    err_inj_loops, err_inj_size);
 
     if (decode && arg < argc) {
 	len = (strlen(argv[arg]) / num_polys) - (k - 1);

@@ -17,7 +17,7 @@ Some references, optimum convolutional code values for various sizes:
 
 https://komm.dev/res/convolutional-codes/
 
-and some theory:
+and note that the "degree" there is K - 1.  And some theory:
 
 https://ocw.mit.edu/courses/6-451-principles-of-digital-communication-ii-spring-2005/43162a4e10d73639903282f4dd58001b_chap9.pdf
 

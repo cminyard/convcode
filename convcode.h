@@ -495,20 +495,17 @@ struct convcode {
 
     /*
      * For the given state, what is the encoded output?  Indexed first
-     * by the bit, then by the state.  The alloc_ values is the one we
-     * allocated, only set if it was not provided at startup.
+     * by the bit, then by the state.
      */
     const convcode_symsize *convert[2];
 
     /*
-     * 2D Array indexed first by bit then by current state.  The
-     * alloc_ values is the one we allocated, only set if it was not
-     * provided at startup.
+     * 2D Array indexed first by bit then by current state.
      */
     const convcode_state *next_state[2];
 
     /*
-     * Were the above allocated by us or passed in.
+     * Were the above allocated by us or passed in?
      */
     bool states_alloced;
 
