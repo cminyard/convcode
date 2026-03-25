@@ -28,6 +28,14 @@ for "Test code" in convcode.c for details on how to use it.  Compiling
 with "make" here will compile with that enabled, "make check" will run
 the tests.
 
+The normal way you can use this is to input your own data and have it
+encode or decode that data.
+
+If run with -t, it runs a standard set of tests.
+
+If run with -j, it does error injection tests on the parameters you
+provide.  This is quite useful for testing performance.
+
 ## Memory Usage
 
 A convolutional decoder can use a lot of memory.  "k" represents the

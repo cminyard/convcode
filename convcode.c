@@ -1539,24 +1539,27 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *
  * To supply your own input and output, run as:
  *
- * ./convcode [-t] [-x] [-w <trellis width>] [-s <start state>] [-i <init_val>]
- *        -p <poly1> [ -p <poly2> ... ] [-g] k <bits>
+ * ./convcode [-t] [-j] [-g] [-u] [-l <loops] [-x] [-w <trellis width>]
+ *        [-s <start state>] [-i <init_val>]
+ *        -p <poly1> [ -p <poly2> ... ] k <bits>
  *
- * where bits is a sequence of 0 or 1.  The -x option disables the
- * "tail" of the encoder and expectation of the tail in the decoder.
- * (see the convcode.h file about do_tail).  -x works with -t to run
- * the tests that way.  Otherwise, no other options have an effect
- * with -t.
+ * where bits is a sequence of 0 or 1.
+
+ * The -x option disables the "tail" of the encoder and expectation of
+ * the tail in the decoder.  (see the convcode.h file about do_tail).
  *
- * The -w option sets the trellis width.
+ * The -t and -j option do tests, more on that later.
+ *
+ * The -g option output coding tables, more on that later.
+ *
+ * The -u and -l option only work with -j, see that section below.
+ *
+ * The -w option sets the trellis width.  Default is 0, or 2 ^ (K - 1).
  *
  * The -s and -i options set the start state of the encoder/decoder,
  * and for decoding the init value for the probability matrix for
  * values besides the start state.  See the discussion on tails in
  * convcode.h for detail.
- *
- * The -g option generates the convert and next_state tables that can
- * be passed into alloc_convcode().
  *
  * For instance, to decode some data with the Voyager coder, do:
  *
@@ -1571,8 +1574,41 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *   errors = 0
  *   bits = 8
  *
- * The tests themselves are stolen from
+ * The -g option generates the convert and next_state tables that can
+ * be passed into alloc_convcode().
+ *
+ * The -t option runs a set of built-in tests on the coder.  The following
+ * options are valid with -t:
+ *
+ *    -w - Set the trellis width.
+ *    -x - disable the tail.
+ *
+ * All other options are ignored.  You do not set the K when running
+ * these tests.  The tests themselves are stolen from
  * https://github.com/xukmin/viterbi.git
+ *
+ * The -j option does a random error injection test.
+ * You do something like:
+ *
+ *   ./convcode -p 0171 -p 0133 -j 7
+ *
+ * And it will run a test on a randomly filled array of data.  It will run
+ * a number of loops starting at 0 injected error, then inserting 1 error
+ * then 2, and so on.  It will continue to increase the number of errors
+ * injected until all loops fail to decode properly.
+ *
+ * Options that work with this are (besides -p and setting K):
+ *    -w - Set the trellis width.  Default is 0, or 2 ^ (K - 1).
+ *    -l - The number of loops.  Default is 100.
+ *    -x - Disable the tail.
+ *    -r - Do recursive.
+ *    -u - Do uncertainty.
+ * All other options are ignored.
+ *
+ * If you enable uncertainty, it will do a semi-normal distribution of
+ * uncertainty, weighted towards 0 for good data and weighted towards
+ * 50 for injected errors.  Uncertainty does an amazing job of improving
+ * the performance.
  */
 
 #include <stdio.h>
@@ -2107,6 +2143,145 @@ run_tests(bool do_tail, convcode_state trellis_width)
     return !!errs;
 }
 
+static unsigned int
+count_bit_diffs(uint8_t *data1, uint8_t *data2, unsigned int size)
+{
+    unsigned int i, diffs = 0;
+
+    for (i = 0; i < size; i++)
+	diffs += num_bits_set(data1[i] ^ data2[i]);
+    return diffs;
+}
+
+static unsigned int
+calc_normal_dist(uint8_t *data, unsigned int size)
+{
+    unsigned int i, curr_val = 0, curr_count = size / 17;
+    int next_curr_count;
+
+    /* A very crude normal distribution. */
+    next_curr_count = curr_count - 2;
+    if (next_curr_count <= 0)
+	next_curr_count = 1;
+    for (i = 0; curr_val <= 50 && i < size; i++) {
+	data[i] = curr_val;
+	curr_count--;
+	if (curr_count == 0) {
+	    curr_val++;
+	    curr_count = next_curr_count;
+	    next_curr_count -= 2;
+	    if (next_curr_count <= 0)
+		next_curr_count = 1;
+	}
+    }
+#if 0
+    printf("Normal distribution(%u):", i);
+    for (i = 0; i < size; i++) {
+	if (i % 8 == 0)
+	    printf("\n%4u:", i);
+	printf(" %2u", data[i]);
+    }
+    printf("\n");
+#endif
+    return i;
+}
+
+#define NORMAL_DIST_ARRAY_SIZE 1024
+static uint8_t normal_dist[NORMAL_DIST_ARRAY_SIZE];
+static unsigned int normal_dist_size;
+
+static void
+setup_uncertainty(uint8_t *uncertainty, unsigned int size)
+{
+    unsigned int i;
+
+    for (i = 0; i < size; i++)
+	uncertainty[i] = normal_dist[rand() % normal_dist_size];
+}
+
+static void
+insert_random_errors(uint8_t *data, unsigned int size, unsigned int count,
+		     uint8_t *uncertainty)
+{
+    unsigned int i, pos;
+    bool err_pos[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL] = { 0 };
+
+    for (i = 0; i < count; i++) {
+	pos = rand() % size;
+	if (err_pos[pos]) /* Already put an error here. */
+	    continue;
+	data[pos / 8] ^= 1 << (pos % 8);
+	if (uncertainty) {
+	    uncertainty[pos] = 50 - normal_dist[rand() % normal_dist_size];
+	}
+	err_pos[pos] = true;
+    }
+}
+
+static int
+err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
+	     unsigned int trellis_width, bool do_tail, bool recursive,
+	     bool do_uncertainty, unsigned int num_loops)
+{
+    struct convcode *ce;
+    uint8_t data[RAND_TEST_SIZE / 8], decoded[RAND_TEST_SIZE / 8];
+    uint8_t encoded[(RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL) / 8];
+    uint8_t uncertainty[RAND_TEST_SIZE * MAX_TEST_POLYS + MAX_TAIL];
+    unsigned int i, j;
+    unsigned int encoded_size, detected_errors, decode_errors, inserted_errors;
+    unsigned int tmp, decode_failures;
+
+    srand(time(NULL));
+    normal_dist_size = calc_normal_dist(normal_dist, NORMAL_DIST_ARRAY_SIZE);
+
+    ce = alloc_convcode(o, k, polys, num_polys, RAND_TEST_SIZE, trellis_width,
+			do_tail, recursive, do_uncertainty,
+			NULL, NULL, NULL, NULL, NULL, NULL);
+
+    printf("Running injection test with %u loops\n", num_loops);
+    for (inserted_errors = 0; ; inserted_errors++) {
+	decode_errors = 0;
+	detected_errors = 0;
+	decode_failures = 0;
+	for (i = 0; i < num_loops; i++) {
+	    for (j = 0; j < sizeof(decoded); j++)
+		data[j] = rand();
+	    reinit_convcode(ce);
+	    memset(encoded, 0, sizeof(encoded));
+	    memset(decoded, 0, sizeof(decoded));
+	    convencode_block(ce, data, RAND_TEST_SIZE, encoded, &encoded_size);
+	    if (do_uncertainty) {
+		setup_uncertainty(uncertainty, encoded_size);
+		insert_random_errors(encoded, encoded_size, inserted_errors,
+				     uncertainty);
+		convdecode_block(ce, encoded, encoded_size, uncertainty,
+				 decoded, NULL, &tmp);
+	    } else {
+		insert_random_errors(encoded, encoded_size, inserted_errors,
+				     NULL);
+		convdecode_block(ce, encoded, encoded_size, NULL,
+				 decoded, NULL, &tmp);
+	    }
+	    detected_errors += tmp;
+
+	    tmp = count_bit_diffs(data, decoded, sizeof(data));
+	    decode_errors += tmp;
+	    if (tmp > 0)
+		decode_failures++;
+	}
+	printf("Inj %u, detected_errs: %u, decode_errs: %u, failures: %u\n",
+	       inserted_errors, detected_errors, decode_errors,
+	       decode_failures);
+	if (decode_failures >= num_loops)
+	    break;
+    }
+
+    free_convcode(ce);
+
+    return 0;
+}
+
+
 static void
 output_tables(struct convcode *ce)
 {
@@ -2159,7 +2334,8 @@ main(int argc, char *argv[])
     struct convcode *ce;
     unsigned int arg, total_bits, num_errs = 0;
     bool decode = false, test = false, do_tail = true, recursive = false;
-    bool gen_tables = false;
+    bool gen_tables = false, do_err_inj_test = false, do_uncertainty = false;
+    unsigned int err_inj_loops = 100;
     unsigned int start_state = 0, init_val = CONVCODE_DEFAULT_INIT_VAL;
     convcode_state trellis_width = 0;
 
@@ -2178,6 +2354,10 @@ main(int argc, char *argv[])
 	    recursive = true;
 	} else if (strcmp(argv[arg], "-g") == 0) {
 	    gen_tables = true;
+	} else if (strcmp(argv[arg], "-j") == 0) {
+	    do_err_inj_test = true;
+	} else if (strcmp(argv[arg], "-u") == 0) {
+	    do_uncertainty = true;
 	} else if (strcmp(argv[arg], "-s") == 0) {
 	    arg++;
 	    if (arg >= argc) {
@@ -2210,6 +2390,13 @@ main(int argc, char *argv[])
 		return 1;
 	    }
 	    polys[num_polys++] = strtoul(argv[arg], NULL, 0);
+	} else if (strcmp(argv[arg], "-l") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -l\n");
+		return 1;
+	    }
+	    err_inj_loops = strtoul(argv[arg], NULL, 0);
 	} else {
 	    fprintf(stderr, "unknown option: %s\n", argv[arg]);
 	    return 1;
@@ -2230,13 +2417,18 @@ main(int argc, char *argv[])
     }
 
     k = strtoul(argv[arg++], NULL, 0);
-    if (k == 0 || k > CONVCODE_MAX_K) {
-	fprintf(stderr, "Constraint (k) must be from 1 to %d\n",
-		CONVCODE_MAX_POLYNOMIALS);
+    if (k < CONVCODE_MIN_K || k > CONVCODE_MAX_K) {
+	fprintf(stderr, "Constraint (k) must be from %u to %u\n",
+		CONVCODE_MIN_K, CONVCODE_MAX_K);
 	return 1;
     }
 
-    if (decode) {
+    if (do_err_inj_test)
+	return err_inj_test(k, polys, num_polys, trellis_width,
+			    do_tail, recursive, do_uncertainty,
+			    err_inj_loops);
+
+    if (decode && arg < argc) {
 	len = (strlen(argv[arg]) / num_polys) - (k - 1);
     } else {
 	len = 0;
