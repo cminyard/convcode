@@ -60,6 +60,30 @@ convcode_encoded_size(unsigned int size, unsigned int num_polys, unsigned int k,
     return size;
 }
 
+int
+convcode_encoded_bits_from_encoded_bytes
+(unsigned int nbytes, unsigned int num_polys,
+ unsigned int k, bool do_tail, unsigned int *nbits)
+{
+    unsigned int size = nbytes * 8;
+    unsigned int tail_size = 0;
+    unsigned int nsyms;
+
+    if (do_tail) {
+	tail_size = num_polys * (k - 1);
+	if (size < tail_size)
+	    return 1;
+    }
+    /* Total possibly symbols (bits) in the actual data. */
+    nsyms = (size - tail_size) / num_polys;
+    /* Decrease until we are a multiple of 8. */
+    nsyms -= nsyms % 8;
+
+    *nbits = nsyms * num_polys + tail_size;
+
+    return 0;
+}
+
 #define CONVCODE_DEFAULT_START_STATE 0
 #define CONVCODE_DEFAULT_INIT_OTHER_STATES (UINT_MAX / 2)
 
@@ -2369,7 +2393,8 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 			do_tail, recursive, do_uncertainty,
 			dummy_convcode_output, NULL, NULL, NULL, NULL, NULL);
 
-    printf("Running injection test with %u loops:%s%s%s\n", num_loops,
+    printf("Running injection test on %u bits with %u loops:%s%s%s\n",
+	   size, num_loops,
 	   recursive ? " recursive" : "",
 	   do_tail_biting ? " tail-biting" : do_tail ? " tail" : "",
 	   do_uncertainty ? " uncertainty" : "");
@@ -2401,6 +2426,18 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 		}
 	    }
 	    convencode_block(ce, data, size, encoded, &encoded_size);
+	    if (size % 8 == 0) {
+		unsigned int encoded_size2;
+
+		/*
+		 * Make sure convcode_encoded_bits_from_encoded_bytes()
+		 * gets the right value.
+		 */
+		assert(convcode_encoded_bits_from_encoded_bytes
+		       (byte_enc_size, num_polys, k,
+			do_tail, &encoded_size2) == 0);
+		assert(encoded_size == encoded_size2);
+	    }
 	    if (uncertainty)
 		setup_uncertainty(uncertainty, encoded_size);
 	    insert_random_errors(encoded, encoded_size, inserted_errors,

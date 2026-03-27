@@ -79,10 +79,26 @@ unsigned int convcode_encoded_size(unsigned int size, unsigned int num_polys,
 				   unsigned int k, bool do_tail);
 
 /*
+ * Helper function for handling byte-aligned messages.
+ *
+ * Take the a number of encoded bytes, assuming the original data was
+ * byte-aligned, and calculate the actual number of encoded bits that
+ * are in the message.  The encoded output may not have been a
+ * multiple of 8 bits, so the end of the last byte can be partially
+ * filled.
+ *
+ * Returns the actual encoded bit length nbits.  Return 0 on success,
+ * non-zero on error.
+ */
+int convcode_encoded_bits_from_encoded_bytes
+(unsigned int nbytes, unsigned int num_polys,
+ unsigned int k, bool do_tail, unsigned int *nbits);
+
+/*
  * Allocate a convolutional coder for coding or decoding.
  *
  * k is the constraint (the size of the polynomials in bits).  The
- * maximum value is CONVCODE_MAX_K,
+ * maximum value is CONVCODE_MAX_K,the minimum value is CONCODE_MIN_K.
  *
  * The polynomials are given in the array.  They are coded where the
  * high bit handles the first bit fed into the state machine.  This
