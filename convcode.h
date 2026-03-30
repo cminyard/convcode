@@ -182,7 +182,7 @@ void convdecode_set_output(struct convcode *ce,
  * split up the individual output streams from each polynomial, like
  * you would for a recursive decoder for turbo coding.
  */
-void set_encode_output_per_symbol(struct convcode *ce, bool val);
+void convencode_set_output_per_symbol(struct convcode *ce, bool val);
 
 /*
  * Convolutional tail
@@ -280,7 +280,8 @@ void reinit_convcode(struct convcode *ce);
  * different max value to range from.  For instance, if you set it to
  * 10 then the values would range from 0 to 10.
  */
-void set_decode_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty);
+void convdecode_set_max_uncertainty(struct convcode *ce,
+				    uint8_t max_uncertainty);
 
 /*
  * Feed some data into encoder.  The size is given in bits, the data
