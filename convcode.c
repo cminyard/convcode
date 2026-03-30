@@ -447,8 +447,6 @@ alloc_convcode(convcode_os_funcs *o,
 	       unsigned int max_decode_len_bits,
 	       unsigned int trellis_width,
 	       bool do_tail, bool recursive, bool do_uncertainty,
-	       convcode_output enc_output, void *enc_out_user_data,
-	       convcode_output dec_output, void *dec_out_user_data,
 	       const convcode_symsize * const *convert,
 	       const convcode_state * const *next_state)
 {
@@ -470,10 +468,6 @@ alloc_convcode(convcode_os_funcs *o,
 
     ce->o = o;
     ce->states_alloced = !convert;
-    ce->enc_out.output = enc_output;
-    ce->enc_out.user_data = enc_out_user_data;
-    ce->dec_out.output = dec_output;
-    ce->dec_out.user_data = dec_out_user_data;
 
     if (!ce->states_alloced) {
 	ce->convert[0] = convert[0];
@@ -539,18 +533,18 @@ alloc_convcode(convcode_os_funcs *o,
 }
 
 void
-convcode_set_enc_output(struct convcode *ce,
-			convcode_output enc_output,
-			void *enc_out_user_data)
+convencode_set_output(struct convcode *ce,
+		      convcode_output enc_output,
+		      void *enc_out_user_data)
 {
     ce->enc_out.output = enc_output;
     ce->enc_out.user_data = enc_out_user_data;
 }
 
 void
-convcode_set_dec_output(struct convcode *ce,
-			convcode_output dec_output,
-			void *dec_out_user_data)
+convdecode_set_output(struct convcode *ce,
+		      convcode_output dec_output,
+		      void *dec_out_user_data)
 {
     ce->dec_out.output = dec_output;
     ce->dec_out.user_data = dec_out_user_data;
@@ -595,7 +589,7 @@ user_output_bits(struct convcode *ce, struct convcode_outdata *of,
 }
 
 void
-set_encode_output_per_symbol(struct convcode *ce, bool val)
+convencode_set_output_per_symbol(struct convcode *ce, bool val)
 {
     if (val)
 	ce->enc_out.output_bits = user_output_bits;
@@ -1647,7 +1641,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *
  * To supply your own input and output, run as:
  *
- * ./convcode [-t] [-j] [-g] [-u] [-b] [-m <size>] [-l <loops] [-x]
+ * ./convcode [-t] [-j] [-c] [-g] [-u] [-b] [-m <size>] [-l <loops] [-x]
  *        [-w <trellis width>]
  *        [-s <start state>] [-i <init_val>]
  *        -p <poly1> [ -p <poly2> ... ] k <bits>
@@ -1657,7 +1651,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  * The -x option disables the "tail" of the encoder and expectation of
  * the tail in the decoder.  (see the convcode.h file about do_tail).
  *
- * The -t and -j option do tests, more on that later.
+ * The -t, -j, and -c option do tests, more on that later.
  *
  * The -g option output coding tables, more on that later.
  *
@@ -1709,7 +1703,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *    -r - Do recursive.
  *    -m - Set the buffer size to encode.  Defaults to 256 bits (32 bytes).
  *    -u - Do uncertainty.
- * All other options are ignored.
+ * All other options are ignored
  *
  * The output is:
  *
@@ -1731,6 +1725,11 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  * uncertainty, weighted towards 0 for good data and weighted towards
  * 50 for injected errors.  Uncertainty does an amazing job of improving
  * the performance.
+ *
+ * The -c option enables a way to measure CPU usage, it just runs the
+ * error injection with no errors injected and quits.  You can set the
+ * number of loops to a large value to measure CPU usage.  It takes
+ * the same parameters as -j.
  *
  * If you enable uncertainty, the detected errors is no longer a count
  * of errors, it is instead a measure of average uncertainty per decode.
@@ -1858,9 +1857,9 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     len = strlen(decoded);
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
-			do_tail, false, uncertainty != NULL,
-			handle_test_output, &t,
-			handle_test_output, &t, NULL, NULL);
+			do_tail, false, uncertainty != NULL, NULL, NULL);
+    convencode_set_output(ce, handle_test_output, &t);
+    convdecode_set_output(ce, handle_test_output, &t);
     printf("Test k=%u %s err=%u polys={ 0%o", k, do_tail ? "tail" : "notail",
 	   expected_errs, polys[0]);
     for (i = 1; i < npolys; i++)
@@ -2025,11 +2024,11 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     len = RAND_TEST_SIZE;
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
-			do_tail, recursive, false,
-			handle_test_output, &t,
-			handle_test_output, &t, convert, next_state);
+			do_tail, recursive, false, convert, next_state);
+    convencode_set_output(ce, handle_test_output, &t);
+    convdecode_set_output(ce, handle_test_output, &t);
     if (recursive)
-	set_encode_output_per_symbol(ce, true);
+	convencode_set_output_per_symbol(ce, true);
 
     printf("Random test k=%u %s %s polys={ 0%o", k,
 	   do_tail ? "tail" : "notail",
@@ -2355,7 +2354,7 @@ dummy_convcode_output(struct convcode *ce, void *user_data,
 static int
 err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	     unsigned int trellis_width, bool do_tail, bool recursive,
-	     bool do_uncertainty, bool do_tail_biting,
+	     bool do_uncertainty, bool do_tail_biting, bool one_loop,
 	     unsigned int num_loops, unsigned int size)
 {
     /* NOTE: size is in bits. */
@@ -2390,8 +2389,8 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
      * bits are ignored.
      */
     ce = alloc_convcode(o, k, polys, num_polys, size, trellis_width,
-			do_tail, recursive, do_uncertainty,
-			dummy_convcode_output, NULL, NULL, NULL, NULL, NULL);
+			do_tail, recursive, do_uncertainty, NULL, NULL);
+    convencode_set_output(ce, dummy_convcode_output, NULL);
 
     printf("Running injection test on %u bits with %u loops:%s%s%s\n",
 	   size, num_loops,
@@ -2477,7 +2476,7 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 		   decode_failures,
 		   ((float) decode_failures * 100 / num_loops));
 	}
-	if (decode_failures >= num_loops)
+	if (decode_failures >= num_loops || one_loop)
 	    break;
     }
 
@@ -2544,7 +2543,7 @@ main(int argc, char *argv[])
     unsigned int arg, total_bits, num_errs = 0;
     bool decode = false, test = false, do_tail = true, recursive = false;
     bool gen_tables = false, do_err_inj_test = false, do_uncertainty = false;
-    bool do_tail_biting = false;
+    bool do_tail_biting = false, do_cpu_usage = false;
     unsigned int err_inj_loops = 100, err_inj_size = RAND_TEST_SIZE;
     convcode_state trellis_width = 0;
 
@@ -2569,6 +2568,8 @@ main(int argc, char *argv[])
 	    do_err_inj_test = true;
 	} else if (strcmp(argv[arg], "-u") == 0) {
 	    do_uncertainty = true;
+	} else if (strcmp(argv[arg], "-c") == 0) {
+	    do_cpu_usage = true;
 	} else if (strcmp(argv[arg], "-w") == 0) {
 	    arg++;
 	    if (arg >= argc) {
@@ -2627,9 +2628,10 @@ main(int argc, char *argv[])
 	return 1;
     }
 
-    if (do_err_inj_test)
+    if (do_err_inj_test || do_cpu_usage)
 	return err_inj_test(k, polys, num_polys, trellis_width,
 			    do_tail, recursive, do_uncertainty, do_tail_biting,
+			    do_cpu_usage,
 			    err_inj_loops, err_inj_size);
 
     if (decode && arg < argc) {
@@ -2639,9 +2641,9 @@ main(int argc, char *argv[])
     }
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, num_polys, len, trellis_width,
-			do_tail, recursive, false,
-			handle_output, NULL,
-			handle_output, NULL, NULL, NULL);
+			do_tail, recursive, false, NULL, NULL);
+    convencode_set_output(ce, handle_output, NULL);
+    convdecode_set_output(ce, handle_output, NULL);
 
     if (gen_tables) {
 	output_tables(ce);

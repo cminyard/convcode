@@ -59,12 +59,6 @@ typedef uint32_t convcode_state;
 #define CONVCODE_PSTATE_SET_BIT(v, b) ((v) | ((b) << (CONVCODE_MAX_K - 1)))
 
 /*
- * Used to report output bits as they are generated.
- */
-typedef int (*convcode_output)(struct convcode *ce, void *user_data,
-			       unsigned char byte, unsigned int nbits);
-
-/*
  * Take the number of bits and return the number of bytes required to
  * hold it.
  */
@@ -128,23 +122,16 @@ int convcode_encoded_bits_from_encoded_bytes
  * polynomials.  The first bit output for each symbol will be the
  * input bit, per standard recursive convolutional encoding.
  *
- * Two separate output functions are set, one for the encoder and one
- * for the decoder.  You can set one you don't use to NULL.
- *
- * Data is generated to the output functions a byte at a time.  You
- * will generally get full bytes (nbits = 8) for all the data except
- * the last one, which may be smaller than 8.  Data is encoded low bit
- * first.
- *
- * If output function returns an error, the operation is stopped and the
- * error will be returned from the various functions.
- *
  * It is possible to pre-create your own convert and next_state tables
  * and pass them in to here.  This is useful for constrained
  * environments where the tables could be stored in ROM/FLASH.  They
  * must, of course, match the rest of the data.  You can use the -g
  * option of convcode command.  Otherwise pass in NULL for convert and
  * next_state.
+ *
+ * If outputting to functions (not doing block operations) you must
+ * set the output functions using the functions described after this
+ * one.
  *
  * Return NULL on an error.
  */
@@ -155,10 +142,6 @@ struct convcode *alloc_convcode(convcode_os_funcs *o,
 				unsigned int trellis_width,
 				bool do_tail, bool recursive,
 				bool do_uncertainty,
-				convcode_output enc_output,
-				void *enc_out_user_data,
-				convcode_output dec_output,
-				void *dec_out_user_data,
 				const convcode_symsize * const *convert,
 				const convcode_state * const *next_state);
 
@@ -168,13 +151,38 @@ struct convcode *alloc_convcode(convcode_os_funcs *o,
  */
 void free_convcode(struct convcode *ce);
 
-/* Change the encode and decoder output functions. */
-void convcode_set_enc_output(struct convcode *ce,
-			     convcode_output enc_output,
-			     void *enc_out_user_data);
-void convcode_set_dec_output(struct convcode *ce,
-			     convcode_output dec_output,
-			     void *dec_out_user_data);
+/*
+ * Set or change the encode and decoder output functions.
+ *
+ * Data is normally generated to the output functions a byte at a
+ * time.  You will generally get full bytes (nbits = 8) for all the
+ * data except the last one, which may be smaller than 8.  Data is
+ * encoded low bit first.
+ *
+ * If output function returns an error, the operation is stopped and
+ * the error will be returned from the function that was called to
+ * cause the output.
+ */
+typedef int (*convcode_output)(struct convcode *ce, void *user_data,
+			       unsigned char byte, unsigned int nbits);
+
+void convencode_set_output(struct convcode *ce,
+			   convcode_output enc_output,
+			   void *enc_out_user_data);
+void convdecode_set_output(struct convcode *ce,
+			   convcode_output dec_output,
+			   void *dec_out_user_data);
+
+/*
+ * If set to false (the default) the output for encoding goes to the
+ * output function in bytes except for possibly the last output.  If
+ * set to true, the output will come out in a symbol, or
+ * num_polynomial, number of bits each time, and there will not be a
+ * chunk at the end that is smaller.  This is useful if you want to
+ * split up the individual output streams from each polynomial, like
+ * you would for a recursive decoder for turbo coding.
+ */
+void set_encode_output_per_symbol(struct convcode *ce, bool val);
 
 /*
  * Convolutional tail
@@ -265,17 +273,6 @@ int reinit_convdecode(struct convcode *ce);
  * Call both of the the above functions.
  */
 void reinit_convcode(struct convcode *ce);
-
-/*
- * If set to false (the default) the output for encoding goes to the
- * output function in bytes except for possibly the last output.  If
- * set to true, the output will come out in a symbol, or
- * num_polynomial, number of bits each time, and there will not be a
- * chunk at the end that is smaller.  This is useful if you want to
- * split up the individual output streams from each polynomial, like
- * you would for a recursive decoder for turbo coding.
- */
-void set_encode_output_per_symbol(struct convcode *ce, bool val);
 
 /*
  * By default the uncertainty ranges from 0 to 100, where 0 is 100%
