@@ -24,7 +24,7 @@
 #include <stdio.h>
 #endif
 
-#define FORCE_INLINE __attribute__((always_inline))
+#define FORCE_INLINE __attribute__((always_inline)) inline
 
 /*
  * The trellis is a two-dimensional matrix, but the size is dynamic
