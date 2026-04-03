@@ -2219,7 +2219,7 @@ run_tests(bool do_tail, convcode_state trellis_width)
 			  NULL, NULL);
     }
     { /* https://komm.dev/res/convolutional-codes/ */
-	convcode_state polys[2] = { 0117, 0155 };
+	convcode_state polys[2] = { 0247, 0371 };
 	errs += rand_test(8, polys, 2, do_tail, trellis_width, false,
 			  NULL, NULL);
     }
