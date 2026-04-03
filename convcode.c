@@ -597,6 +597,12 @@ convencode_set_output_per_symbol(struct convcode *ce, bool val)
 	ce->enc_out.output_bits = output_bits;
 }
 
+void
+convencode_set_byte_span(struct convcode *ce, bool do_span)
+{
+    ce->optimize_no_span = !do_span;
+}
+
 int
 convencode_bit(struct convcode *ce, unsigned int bit)
 {
@@ -762,15 +768,12 @@ convencode_block_partial(struct convcode *ce,
 			 const unsigned char *bytes, unsigned int nbits,
 			 unsigned char **outbytes, unsigned int *outbitpos)
 {
-    convencode_block_partial_i(ce, bytes, nbits, true, outbytes, outbitpos);
-}
-
-void
-convencode_block_partial_ns(struct convcode *ce,
-			    const unsigned char *bytes, unsigned int nbits,
-			    unsigned char **outbytes, unsigned int *outbitpos)
-{
-    convencode_block_partial_i(ce, bytes, nbits, false, outbytes, outbitpos);
+    if (ce->optimize_no_span)
+	convencode_block_partial_i(ce, bytes, nbits, false,
+				   outbytes, outbitpos);
+    else
+	convencode_block_partial_i(ce, bytes, nbits, true,
+				   outbytes, outbitpos);
 }
 
 void
@@ -779,18 +782,13 @@ convencode_block_final(struct convcode *ce,
 {
     unsigned int i;
 
-    for (i = 0; i < ce->tail_bits; i++)
-	convencode_block_bit(ce, 0, true, &outbytes, &outbitpos);
-}
-
-void
-convencode_block_final_ns(struct convcode *ce,
-			  unsigned char *outbytes, unsigned int outbitpos)
-{
-    unsigned int i;
-
-    for (i = 0; i < ce->tail_bits; i++)
-	convencode_block_bit(ce, 0, false, &outbytes, &outbitpos);
+    if (ce->optimize_no_span) {
+	for (i = 0; i < ce->tail_bits; i++)
+	    convencode_block_bit(ce, 0, false, &outbytes, &outbitpos);
+    } else {
+	for (i = 0; i < ce->tail_bits; i++)
+	    convencode_block_bit(ce, 0, true, &outbytes, &outbitpos);
+    }
 }
 
 void
@@ -798,14 +796,18 @@ convencode_block(struct convcode *ce,
 		 const unsigned char *bytes, unsigned int nbits,
 		 unsigned char *outbytes, unsigned int *total_out_bits)
 {
-    unsigned int outbitpos = 0;
+    unsigned int outbitpos = 0, i;
 
     if (ce->optimize_no_span) {
-	convencode_block_partial_ns(ce, bytes, nbits, &outbytes, &outbitpos);
-	convencode_block_final_ns(ce, outbytes, outbitpos);
+	convencode_block_partial_i(ce, bytes, nbits, false,
+				   &outbytes, &outbitpos);
+	for (i = 0; i < ce->tail_bits; i++)
+	    convencode_block_bit(ce, 0, false, &outbytes, &outbitpos);
     } else {
-	convencode_block_partial(ce, bytes, nbits, &outbytes, &outbitpos);
-	convencode_block_final(ce, outbytes, outbitpos);
+	convencode_block_partial_i(ce, bytes, nbits, true,
+				   &outbytes, &outbitpos);
+	for (i = 0; i < ce->tail_bits; i++)
+	    convencode_block_bit(ce, 0, true, &outbytes, &outbitpos);
     }
     if (total_out_bits)
 	*total_out_bits = (nbits + ce->tail_bits) * ce->num_polys;

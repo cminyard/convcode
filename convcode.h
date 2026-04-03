@@ -317,14 +317,32 @@ int convencode_bit(struct convcode *ce, unsigned int bit);
 int convencode_finish(struct convcode *ce, unsigned int *total_out_bits);
 
 /*
+ * If the number of polynomials is 2, 4, or 8, symbols are that size
+ * and the coder will automatically set bit spanning off.  Normally
+ * this is what you want; it's more efficient to put the encoded bits
+ * in this way, as they will never span a byte and you can just stuff
+ * them in.
+ *
+ * However, if the output bits are not aligned with a byte for some
+ * reason, this means you must span bytes and more complicated code
+ * must run to break the symbols apart and then stuff them into
+ * multiple bytes.  This is here for that special case.
+ *
+ * Don't set this just arbitrarily, you should almost never have to
+ * set this to true.  Setting it to false is safe, but it will be less
+ * efficient if you don't have to span bytes.
+ */
+void convencode_set_byte_span(struct convcode *ce, bool do_span);
+
+/*
  * Encode a block of data bits.  The output bits are stored in
  * outbytes, which must be large enough to hold the full encoded
  * output.  If tail is set, then this will be ((nbits + k - 1) *
  * num_polynomials).  If tail is not set, this will be (nbits *
  * num_polynomials).  The output function is not used in this case.
  *
- * This will automatically do the no-span optimization if it can,
- * see the next comment for details on that.
+ * This will automatically do the span optimization if it can,
+ * see the comment on convencode_set_byte_span() for details.
  *
  * If total_out_bits is not NULL, the total number of bits generated
  * into outbytes will be returned there.
@@ -338,25 +356,15 @@ void convencode_block(struct convcode *ce,
  * partial() for all blocks, and call convencode_block_final() at the
  * end to handle the tail bits (if you have that set).
  *
- * The _ns (no-span) versions can be used as an optimization in case
- * the number of polynomials is 2, 4, or 8 and you start on bit 0 of
- * the output bytes.  This way the calculations to handle putting the
- * bits into the bytes never have to handle spanned bits (where some
- * bits of a symbol go into one byte and the rest go into the next
- * byte).
+ * This will automatically do the span optimization if it can,
+ * see the comment on convencode_set_byte_span() for details.
  */
 void convencode_block_partial(struct convcode *ce,
 			      const unsigned char *bytes, unsigned int nbits,
 			      unsigned char **outbytes,
 			      unsigned int *outbitpos);
-void convencode_block_partial_ns(struct convcode *ce,
-				 const unsigned char *bytes, unsigned int nbits,
-				 unsigned char **outbytes,
-				 unsigned int *outbitpos);
 void convencode_block_final(struct convcode *ce,
 			    unsigned char *outbytes, unsigned int outbitpos);
-void convencode_block_final_ns(struct convcode *ce,
-			       unsigned char *outbytes, unsigned int outbitpos);
 
 /*
  * Feed some data into decoder.  The size is given in bits, the data
