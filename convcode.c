@@ -52,34 +52,129 @@ set_trellis_entry(struct convcode *ce, unsigned int column, unsigned int row,
 
 unsigned int
 convcode_encoded_size(unsigned int size, unsigned int num_polys, unsigned int k,
-		      bool do_tail)
+		      bool do_tail, char *puncture, unsigned int puncture_len)
 {
     size *= num_polys;
     if (do_tail)
 	size += num_polys * (k - 1);
+
+    if (puncture) {
+	unsigned int i, osize, p = 0;
+
+	/* p is the number of bits set in the puncture. */
+	for (i = 0; i < puncture_len; i++) {
+	    if (puncture[i])
+		p++;
+	}
+
+	osize = size / puncture_len * p;
+
+	/*
+	 * The above doesn't count the items at the end if size is not
+	 * a multiple of puncture_len.  So get the items at the end.
+	 */
+	for (i = 0; i < size % puncture_len; i++) {
+	    if (puncture[i])
+		osize++;
+	}
+	size = osize;
+    }
     return size;
+}
+
+int
+convcode_decoded_size(unsigned int size, unsigned int num_polys, unsigned int k,
+		      bool do_tail, char *puncture, unsigned int puncture_len,
+		      unsigned int *dsize)
+{
+    if (puncture) {
+	unsigned int i, osize, p = 0;
+
+	/* p is the number of bits set in the puncture. */
+	for (i = 0; i < puncture_len; i++) {
+	    if (puncture[i])
+		p++;
+	}
+
+	osize = size / p * puncture_len;
+
+	/*
+	 * The above doesn't count the items at the end if size is not
+	 * a multiple of puncture_len.  So get the items at the end.
+	 */
+	for (i = 0; i < size % p; i++) {
+	    osize++;
+	    if (!puncture[i])
+		osize++;
+	}
+	/* Handle puncture bits at the end. */
+	for (; osize % puncture_len != 0 && !puncture[i]; i++) {
+	    osize++;
+	}
+	/* FIXME - remove after testing. */
+	assert(i <= puncture_len);
+	size = osize;
+    }
+
+    if (size % num_polys != 0)
+	return 1;
+
+    size /= num_polys;
+    if (do_tail)
+	size -= k - 1;
+
+    *dsize = size;
+    return 0;
 }
 
 int
 convcode_encoded_bits_from_encoded_bytes
 (unsigned int nbytes, unsigned int num_polys,
- unsigned int k, bool do_tail, unsigned int *nbits)
+ unsigned int k, bool do_tail, unsigned int *nbits,
+ char *puncture, unsigned int puncture_len)
 {
     unsigned int size = nbytes * 8;
     unsigned int tail_size = 0;
-    unsigned int nsyms;
+    unsigned int nsyms, p = 0, i;
+    int err;
+
+    if (puncture) {
+	/* p is the number of bits set in the puncture. */
+	for (i = 0; i < puncture_len; i++) {
+	    if (puncture[i])
+		p++;
+	}
+
+	/* Go backwards until we find one that works. */
+	err = convcode_decoded_size(size, num_polys, k, do_tail,
+				    puncture, puncture_len, &nsyms);
+	while (size >= num_polys && (err || nsyms % 8 != 0)) {
+	    size--;
+	    err = convcode_decoded_size(size, num_polys, k, do_tail,
+					puncture, puncture_len, &nsyms);
+	}
+	if (size < num_polys)
+	    return 1;
+
+	*nbits = convcode_encoded_size(nsyms, num_polys, k, do_tail,
+				       puncture, puncture_len);
+
+	return 0;
+    }
 
     if (do_tail) {
 	tail_size = num_polys * (k - 1);
 	if (size < tail_size)
 	    return 1;
     }
-    /* Total possibly symbols (bits) in the actual data. */
+
+    /* Total possibly symbols (decoded bits) in the actual data. */
     nsyms = (size - tail_size) / num_polys;
     /* Decrease until we are a multiple of 8. */
     nsyms -= nsyms % 8;
 
-    *nbits = nsyms * num_polys + tail_size;
+    *nbits = convcode_encoded_size(size, num_polys, k, do_tail,
+				   puncture, puncture_len);
 
     return 0;
 }
@@ -750,10 +845,10 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
 	    ce->enc_puncture_pos++;
 	    if (ce->enc_puncture_pos >= ce->puncture_len)
 		ce->enc_puncture_pos = 0;
+	    bits_left--;
 	    if (punc)
 		continue;
 	    *outbytes |= (outbits & 1) << outbitpos;
-	    bits_left--;
 	    outbitpos++;
 	    if (outbitpos >= 8) {
 		/* Finished this byte, move to the next. */
@@ -867,6 +962,7 @@ convencode_block(struct convcode *ce,
 		 unsigned char *outbytes, unsigned int *total_out_bits)
 {
     unsigned int outbitpos = 0, i;
+    unsigned char *orig_outbytes = outbytes;
 
     if (ce->puncture_len > 0) {
 	convencode_block_partial_i(ce, bytes, nbits, false, true,
@@ -885,7 +981,7 @@ convencode_block(struct convcode *ce,
 	    convencode_block_bit(ce, 0, true, false, &outbytes, &outbitpos);
     }
     if (total_out_bits)
-	*total_out_bits = (nbits + ce->tail_bits) * ce->num_polys;
+	*total_out_bits = (outbytes - orig_outbytes) * 8 + outbitpos;
 }
 
 /*
@@ -2623,7 +2719,8 @@ static int
 err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	     unsigned int trellis_width, bool do_tail, bool recursive,
 	     bool do_uncertainty, bool do_tail_biting, bool one_loop,
-	     unsigned int num_loops, unsigned int size)
+	     unsigned int num_loops, unsigned int size,
+	     char *puncture, unsigned int puncture_len)
 {
     /* NOTE: size is in bits. */
     struct convcode *ce;
@@ -2638,7 +2735,8 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
     if (do_tail_biting)
 	do_tail = false;
 
-    enc_size = convcode_encoded_size(size, num_polys, k, do_tail);
+    enc_size = convcode_encoded_size(size, num_polys, k, do_tail,
+				     puncture, puncture_len);
     byte_size = CONVCODE_ROUND_UP_BYTE(size);
     byte_enc_size = CONVCODE_ROUND_UP_BYTE(enc_size);
 
@@ -2658,10 +2756,12 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
      */
     ce = alloc_convcode(o, k, polys, num_polys, size, trellis_width,
 			do_tail, recursive, do_uncertainty, NULL, NULL);
+    if (puncture)
+	convcode_set_puncture(ce, puncture, puncture_len);
     convencode_set_output(ce, dummy_convcode_output, NULL);
 
-    printf("Running injection test on %u bits with %u loops:%s%s%s\n",
-	   size, num_loops,
+    printf("Running injection test on %u bits (%u enc) with %u loops:%s%s%s\n",
+	   size, enc_size, num_loops,
 	   recursive ? " recursive" : "",
 	   do_tail_biting ? " tail-biting" : do_tail ? " tail" : "",
 	   do_uncertainty ? " uncertainty" : "");
@@ -2693,6 +2793,7 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 		}
 	    }
 	    convencode_block(ce, data, size, encoded, &encoded_size);
+	    assert(encoded_size == enc_size);
 	    if (size % 8 == 0) {
 		unsigned int encoded_size2;
 
@@ -2702,7 +2803,8 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 		 */
 		assert(convcode_encoded_bits_from_encoded_bytes
 		       (byte_enc_size, num_polys, k,
-			do_tail, &encoded_size2) == 0);
+			do_tail, &encoded_size2,
+			puncture, puncture_len) == 0);
 		assert(encoded_size == encoded_size2);
 	    }
 	    if (uncertainty)
@@ -2800,10 +2902,28 @@ output_tables(struct convcode *ce)
     printf("};\n");
 }
 
+static char puncture_code_12[] = { 1, 1 };
+static char puncture_code_23[] = { 1, 0, 1, 1 };
+static char puncture_code_34[] = { 1, 1, 0, 1, 0, 1 };
+static char puncture_code_78[] = { 1, 1, 1, 1, 1, 1, 1, 0 };
+
+static struct {
+    char *name;
+    char *code;
+    unsigned int len;
+} puncture_codes[] = {
+    { "1/2", puncture_code_12, 2 },
+    { "2/3", puncture_code_23, 4 },
+    { "3/4", puncture_code_34, 6 },
+    { "7/8", puncture_code_78, 8 },
+    { NULL }
+};
+
 int
 main(int argc, char *argv[])
 {
     convcode_state polys[CONVCODE_MAX_POLYNOMIALS];
+    unsigned int i;
     unsigned int num_polys = 0;
     unsigned int k;
     unsigned int len;
@@ -2814,6 +2934,8 @@ main(int argc, char *argv[])
     bool do_tail_biting = false, do_cpu_usage = false;
     unsigned int err_inj_loops = 100, err_inj_size = RAND_TEST_SIZE;
     convcode_state trellis_width = 0;
+    char *puncture_code = NULL;
+    unsigned int puncture_code_len = 0;
 
     for (arg = 1; arg < argc; arg++) {
 	if (argv[arg][0] != '-')
@@ -2870,6 +2992,22 @@ main(int argc, char *argv[])
 		return 1;
 	    }
 	    err_inj_size = strtoul(argv[arg], NULL, 0);
+	} else if (strcmp(argv[arg], "-pc") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -pc\n");
+		return 1;
+	    }
+	    for (i = 0; puncture_codes[i].name; i++) {
+		if (strcmp(puncture_codes[i].name, argv[arg]) == 0)
+		    break;
+	    }
+	    if (!puncture_codes[i].name) {
+		fprintf(stderr, "Invalid puncture code name for -pc\n");
+		return 1;
+	    }
+	    puncture_code = puncture_codes[i].code;
+	    puncture_code_len = puncture_codes[i].len;
 	} else {
 	    fprintf(stderr, "unknown option: %s\n", argv[arg]);
 	    return 1;
@@ -2900,16 +3038,25 @@ main(int argc, char *argv[])
 	return err_inj_test(k, polys, num_polys, trellis_width,
 			    do_tail, recursive, do_uncertainty, do_tail_biting,
 			    do_cpu_usage,
-			    err_inj_loops, err_inj_size);
+			    err_inj_loops, err_inj_size,
+			    puncture_code, puncture_code_len);
 
     if (decode && arg < argc) {
-	len = (strlen(argv[arg]) / num_polys) - (k - 1);
+	int rv;
+	rv = convcode_decoded_size(strlen(argv[arg]), num_polys, k, do_tail,
+				   puncture_code, puncture_code_len, &len);
+	if (rv) {
+	    printf("Encoded data size does not match the number of polynomials\n");
+	    return 1;
+	}
     } else {
 	len = 0;
     }
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, num_polys, len, trellis_width,
 			do_tail, recursive, false, NULL, NULL);
+    if (puncture_code)
+	convcode_set_puncture(ce, puncture_code, puncture_code_len);
     convencode_set_output(ce, handle_output, NULL);
     convdecode_set_output(ce, handle_output, NULL);
 

@@ -70,7 +70,19 @@ typedef uint32_t convcode_state;
  * data.
  */
 unsigned int convcode_encoded_size(unsigned int size, unsigned int num_polys,
-				   unsigned int k, bool do_tail);
+				   unsigned int k, bool do_tail,
+				   char *puncture, unsigned int puncture_len);
+
+/*
+ * Given a set of parameters and an encoded size, calculate what the
+ * decoded size is.  Returns 1 (an error) if the size doesn't line up
+ * with the number of polynomials.  Returns 0 otherwise.
+ *
+ * dsize is the number of bits that will be in the decoded output.
+ */
+int convcode_decoded_size(unsigned int size, unsigned int num_polys,
+			  unsigned int k, bool do_tail, char *puncture,
+			  unsigned int puncture_len, unsigned int *dsize);
 
 /*
  * Helper function for handling byte-aligned messages.
@@ -86,7 +98,8 @@ unsigned int convcode_encoded_size(unsigned int size, unsigned int num_polys,
  */
 int convcode_encoded_bits_from_encoded_bytes
 (unsigned int nbytes, unsigned int num_polys,
- unsigned int k, bool do_tail, unsigned int *nbits);
+ unsigned int k, bool do_tail, unsigned int *nbits,
+ char *puncture, unsigned int puncture_len);
 
 /*
  * Allocate a convolutional coder for coding or decoding.
