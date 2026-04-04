@@ -185,6 +185,32 @@ void convdecode_set_output(struct convcode *ce,
 void convencode_set_output_per_symbol(struct convcode *ce, bool val);
 
 /*
+ * Set a puncturing array to puncture on encoding and to inject zeros
+ * when decoding.
+ *
+ * The array is an array of chars that are used as bools.  The coding
+ * process goes through them one at a time when inputting or
+ * outputting bits.  If a bool is set, the bit is output or input.  If
+ * a bool is not set, it is dropped on output and on input a 0 bit is
+ * injected.
+ *
+ * For instance. if the array is { 1, 1, 1, 0 } then the output will
+ * drop every 4th bit.  When inputting, three bits are pulled from the
+ * input and then a zero is injected then three more bits are pulled,
+ * etc.
+ *
+ * The array can be arbitrarily long to accomplish whatever puncturing
+ * you would like.
+ *
+ * Note that puncture arrays do not work on encoding if you set
+ * output-per-symbol.  You will get whole symbols still and you will
+ * have to do the puncture yourself.  They also do not work if you
+ * feed the data in per symbol with convdecode_symbol().
+ */
+void convcode_set_puncture(struct convcode *ce, const char *puncture_array,
+			   unsigned int puncture_array_len);
+
+/*
  * Convolutional tail
  *
  * Normally you have a "tail" of the convolutional code, where you
@@ -548,6 +574,12 @@ struct convcode {
 
     /* Current state. */
     convcode_state enc_state;
+
+    /* Puncture array. */
+    unsigned int puncture_len;
+    unsigned int enc_puncture_pos;
+    unsigned int dec_puncture_pos;
+    const char *puncture;
 
     /*
      * For the given state, what is the encoded output?  Indexed first

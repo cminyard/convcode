@@ -85,7 +85,7 @@ convcode_encoded_bits_from_encoded_bytes
 }
 
 #define CONVCODE_DEFAULT_START_STATE 0
-#define CONVCODE_DEFAULT_INIT_OTHER_STATES (UINT_MAX / 2)
+#define CONVCODE_DEFAULT_INIT_OTHER_STATES (UINT_MAX / 4)
 
 void
 reinit_convencode(struct convcode *ce)
@@ -94,6 +94,7 @@ reinit_convencode(struct convcode *ce)
     ce->enc_out.out_bits = 0;
     ce->enc_out.out_bit_pos = 0;
     ce->enc_out.total_out_bits = 0;
+    ce->enc_puncture_pos = 0;
 }
 
 static unsigned int
@@ -170,6 +171,7 @@ reinit_convdecode_i(struct convcode *ce, bool tail_bite)
     }
     ce->ctrellis = 0;
     ce->leftover_bits = 0;
+    ce->dec_puncture_pos = 0;
     return 0;
 }
 
@@ -551,7 +553,7 @@ convdecode_set_output(struct convcode *ce,
 }
 
 void
-set_decode_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty)
+convdecode_set_max_uncertainty(struct convcode *ce, uint8_t max_uncertainty)
 {
     ce->uncertainty_100 = max_uncertainty;
 }
@@ -582,6 +584,28 @@ output_bits(struct convcode *ce, struct convcode_outdata *of,
 }
 
 static int
+output_bits_puncture(struct convcode *ce, struct convcode_outdata *of,
+		     unsigned int bits, unsigned int len)
+{
+    int rv;
+
+    while (len > 0) {
+	if (ce->puncture[ce->enc_puncture_pos]) {
+	    rv = output_bits(ce, of, bits & 1, 1);
+	    if (rv)
+		return rv;
+	}
+	bits >>= 1;
+	ce->enc_puncture_pos++;
+	if (ce->enc_puncture_pos >= ce->puncture_len)
+	    ce->enc_puncture_pos = 0;
+	len--;
+    }
+
+    return 0;
+}
+
+static int
 user_output_bits(struct convcode *ce, struct convcode_outdata *of,
 		 unsigned int bits, unsigned int len)
 {
@@ -593,8 +617,24 @@ convencode_set_output_per_symbol(struct convcode *ce, bool val)
 {
     if (val)
 	ce->enc_out.output_bits = user_output_bits;
+    else if (ce->puncture_len > 0)
+	ce->enc_out.output_bits = output_bits_puncture;
     else
 	ce->enc_out.output_bits = output_bits;
+}
+
+void
+convcode_set_puncture(struct convcode *ce, const char *puncture_array,
+		      unsigned int puncture_len)
+{
+    ce->puncture = puncture_array;
+    ce->puncture_len = puncture_len;
+    if (ce->enc_out.output_bits != user_output_bits) {
+	if (ce->puncture_len > 0)
+	    ce->enc_out.output_bits = output_bits_puncture;
+	else
+	    ce->enc_out.output_bits = output_bits;
+    }
 }
 
 void
@@ -682,7 +722,7 @@ convencode_finish(struct convcode *ce, unsigned int *total_out_bits)
  */
 static FORCE_INLINE void
 convencode_block_bit(struct convcode *ce, unsigned int bit,
-		     bool do_bit_span,
+		     bool do_bit_span, bool do_puncture,
 		     unsigned char **ioutbytes,
 		     unsigned int *ioutbitpos)
 {
@@ -702,6 +742,27 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
     bits_left = ce->num_polys;
 
     /* Now comes the messy job of putting the bits into outbytes. */
+
+    if (do_puncture) {
+	while (bits_left > 0) {
+	    bool punc = !ce->puncture[ce->enc_puncture_pos];
+
+	    ce->enc_puncture_pos++;
+	    if (ce->enc_puncture_pos >= ce->puncture_len)
+		ce->enc_puncture_pos = 0;
+	    if (punc)
+		continue;
+	    *outbytes |= (outbits & 1) << outbitpos;
+	    bits_left--;
+	    outbitpos++;
+	    if (outbitpos >= 8) {
+		/* Finished this byte, move to the next. */
+		outbytes++;
+		outbitpos = 0;
+	    }
+	}
+	goto out;
+    }
 
     if (do_bit_span) {
 	/*
@@ -731,6 +792,7 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
 	outbytes++;
 	outbitpos = 0;
     }
+ out:
     *ioutbytes = outbytes;
     *ioutbitpos = outbitpos;
 }
@@ -738,7 +800,7 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
 static FORCE_INLINE void
 convencode_block_partial_i(struct convcode *ce,
 			   const unsigned char *bytes, unsigned int nbits,
-			   bool do_bit_span,
+			   bool do_bit_span, bool do_puncture,
 			   unsigned char **outbytes, unsigned int *outbitpos)
 {
     unsigned int nbytes = nbits / 8;
@@ -749,7 +811,8 @@ convencode_block_partial_i(struct convcode *ce,
     for (i = 0; i < nbytes; i++) {
 	byte = bytes[i];
 	for (j = 0; j < 8; j++) {
-	    convencode_block_bit(ce, byte & 1, do_bit_span, outbytes, outbitpos);
+	    convencode_block_bit(ce, byte & 1, do_bit_span, do_puncture,
+				 outbytes, outbitpos);
 	    byte >>= 1;
 	}
     }
@@ -757,7 +820,8 @@ convencode_block_partial_i(struct convcode *ce,
     if (extra_bits > 0) {
 	byte = bytes[i];
 	for (j = 0; j < extra_bits; j++) {
-	    convencode_block_bit(ce, byte & 1, do_bit_span, outbytes, outbitpos);
+	    convencode_block_bit(ce, byte & 1, do_bit_span, do_puncture,
+				 outbytes, outbitpos);
 	    byte >>= 1;
 	}
     }
@@ -768,11 +832,14 @@ convencode_block_partial(struct convcode *ce,
 			 const unsigned char *bytes, unsigned int nbits,
 			 unsigned char **outbytes, unsigned int *outbitpos)
 {
-    if (ce->optimize_no_span)
-	convencode_block_partial_i(ce, bytes, nbits, false,
+    if (ce->puncture_len > 0)
+	convencode_block_partial_i(ce, bytes, nbits, true, true,
+				   outbytes, outbitpos);
+    else if (ce->optimize_no_span)
+	convencode_block_partial_i(ce, bytes, nbits, false, false,
 				   outbytes, outbitpos);
     else
-	convencode_block_partial_i(ce, bytes, nbits, true,
+	convencode_block_partial_i(ce, bytes, nbits, true, false,
 				   outbytes, outbitpos);
 }
 
@@ -782,12 +849,15 @@ convencode_block_final(struct convcode *ce,
 {
     unsigned int i;
 
-    if (ce->optimize_no_span) {
+    if (ce->puncture_len > 0) {
 	for (i = 0; i < ce->tail_bits; i++)
-	    convencode_block_bit(ce, 0, false, &outbytes, &outbitpos);
+	    convencode_block_bit(ce, 0, false, true, &outbytes, &outbitpos);
+    } else if (ce->optimize_no_span) {
+	for (i = 0; i < ce->tail_bits; i++)
+	    convencode_block_bit(ce, 0, false, false, &outbytes, &outbitpos);
     } else {
 	for (i = 0; i < ce->tail_bits; i++)
-	    convencode_block_bit(ce, 0, true, &outbytes, &outbitpos);
+	    convencode_block_bit(ce, 0, true, false, &outbytes, &outbitpos);
     }
 }
 
@@ -798,16 +868,21 @@ convencode_block(struct convcode *ce,
 {
     unsigned int outbitpos = 0, i;
 
-    if (ce->optimize_no_span) {
-	convencode_block_partial_i(ce, bytes, nbits, false,
+    if (ce->puncture_len > 0) {
+	convencode_block_partial_i(ce, bytes, nbits, false, true,
 				   &outbytes, &outbitpos);
 	for (i = 0; i < ce->tail_bits; i++)
-	    convencode_block_bit(ce, 0, false, &outbytes, &outbitpos);
+	    convencode_block_bit(ce, 0, false, true, &outbytes, &outbitpos);
+    } else if (ce->optimize_no_span) {
+	convencode_block_partial_i(ce, bytes, nbits, false, false,
+				   &outbytes, &outbitpos);
+	for (i = 0; i < ce->tail_bits; i++)
+	    convencode_block_bit(ce, 0, false, false, &outbytes, &outbitpos);
     } else {
-	convencode_block_partial_i(ce, bytes, nbits, true,
+	convencode_block_partial_i(ce, bytes, nbits, true, false,
 				   &outbytes, &outbitpos);
 	for (i = 0; i < ce->tail_bits; i++)
-	    convencode_block_bit(ce, 0, true, &outbytes, &outbitpos);
+	    convencode_block_bit(ce, 0, true, false, &outbytes, &outbitpos);
     }
     if (total_out_bits)
 	*total_out_bits = (nbits + ce->tail_bits) * ce->num_polys;
@@ -1299,68 +1374,91 @@ extract_bits(const unsigned char *bytes, unsigned int curr, unsigned int nbits)
 }
 
 /*
- * Handle some new bits if we have leftover bits from the previous
- * handling.  If there are not enough new bits for a symbol, this just
- * adds the new bits and returns.  Otherwise this takes the old bits
- * and sets up for processing the next symbol.
+ * Extract symbol bits from bytes at offset curr, adding punctured bits
+ * as necessary.
  *
- * The uncertainty check should optimize away.
+ * The bools are for optimization, passing them in as constants should
+ * cause unused portions of this code to be optimized away.
+ *
+ * Returns true if we got a full symbol, or false if not.
+ *
+ * If a full symbol is not extracted, the unused bits are stored in
+ * the leftover bits.
  */
 static FORCE_INLINE bool
-process_old_leftover_bits(struct convcode *ce,
-			  const unsigned char *bytes,
-			  unsigned int *nbits,
-			  unsigned int *curr_bit,
-			  bool do_uncertainty,
-			  const uint8_t *uncertainty)
+extract_sym(struct convcode *ce,
+	    bool do_leftover, bool do_puncture,
+	    const unsigned char *bytes, unsigned int size,
+	    unsigned int *ocurr,
+	    const uint8_t *uncertainty, uint8_t *out_uncertainty,
+	    convcode_symsize *out_sym)
 {
-    convcode_symsize newbits;
-    unsigned int extract_size, i;
+    unsigned int nbits = ce->num_polys;
+    unsigned int i, curr = *ocurr;
+    unsigned int pos = curr / 8;
+    unsigned int bit = curr % 8;
+    unsigned int opos = 0;
+    convcode_symsize v = 0;
+    bool punc;
 
-    if (*nbits + ce->leftover_bits < ce->num_polys) {
-	/* Not enough bits for a full symbol, just store these. */
-	ce->leftover_bits_data |= bytes[0] << ce->leftover_bits;
-	ce->leftover_bits += *nbits;
-	ce->leftover_bits_data &= (1 << ce->leftover_bits) - 1;
+    if (do_leftover) {
+	opos = ce->leftover_bits;
+	if (uncertainty) {
+	    for (i = 0; i < opos; i++)
+		out_uncertainty[i] = ce->leftover_uncertainty[i];
+	}
+	v = ce->leftover_bits_data;
+	DEBUG_ASSERT(opos < nbits);
+	nbits -= opos;
+	ce->leftover_bits = 0;
+	ce->leftover_bits_data = 0;
+    }
+
+    punc = do_puncture && !ce->puncture[ce->dec_puncture_pos];
+    while (nbits > 0 && (curr < size || punc)) {
+	if (punc) {
+	    /* Stuff in a punctured zero. */
+	    if (uncertainty) {
+		out_uncertainty[opos] = ce->uncertainty_100 / 2;
+	    }
+	    opos++;
+	} else {
+	    v |= ((bytes[pos] >> bit) & 1) << opos;
+	    bit++;
+	    if (uncertainty) {
+		out_uncertainty[opos] = uncertainty[curr];
+	    }
+	    opos++;
+	    if (bit >= 8) {
+		bit = 0;
+		pos++;
+	    }
+	    curr++;
+	}
+	if (do_puncture) {
+	    ce->dec_puncture_pos++;
+	    if (ce->dec_puncture_pos >= ce->puncture_len)
+		ce->dec_puncture_pos = 0;
+	}
+	nbits--;
+	punc = do_puncture && !ce->puncture[ce->dec_puncture_pos];
+    }
+
+    *ocurr = curr;
+
+    if (opos < ce->num_polys) {
+	ce->leftover_bits = opos;
+	ce->leftover_bits_data = v;
+	if (uncertainty) {
+	    for (i = 0; i < opos; i++)
+		ce->leftover_uncertainty[i] = out_uncertainty[i];
+	}
 	return false;
     }
-    /* We got enough bits for a full symbol, process it. */
-    extract_size = ce->num_polys - ce->leftover_bits;
-    newbits = extract_bits(bytes, *curr_bit, extract_size);
-    *curr_bit += extract_size;
-    *nbits -= extract_size;
-    ce->leftover_bits_data |= newbits << ce->leftover_bits;
-    if (do_uncertainty) {
-	for (i = 0; i < extract_size; i++)
-	    ce->leftover_uncertainty[ce->leftover_bits++] = uncertainty[i];
-    }
+
+    *out_sym = v;
+
     return true;
-}
-
-/*
- * Handle leftover bits after processing a set of symbols.  This will
- * store any leftover bits for processing later.
- *
- * The uncertainty check should optimize away.
- */
-static FORCE_INLINE void
-handle_new_leftover_bits(struct convcode *ce,
-			 const unsigned char *bytes, unsigned int nbits,
-			 unsigned int curr_bit,
-			 bool do_uncertainty,
-			 const uint8_t *uncertainty)
-{
-    unsigned int i;
-
-    ce->leftover_bits = nbits;
-    if (nbits) {
-	ce->leftover_bits_data = bytes[curr_bit / 8] >> (curr_bit % 8);
-	ce->leftover_bits_data &= (1 << nbits) - 1;
-	if (do_uncertainty) {
-	    for (i = 0; i < ce->leftover_bits; i++)
-		ce->leftover_uncertainty[i] = uncertainty[curr_bit++];
-	}
-    }
 }
 
 int
@@ -1368,28 +1466,41 @@ convdecode_data(struct convcode *ce,
 		const unsigned char *bytes, unsigned int nbits)
 {
     unsigned int curr_bit = 0;
+    convcode_symsize sym;
     int rv;
 
-    if (ce->leftover_bits) {
-	if (!process_old_leftover_bits(ce, bytes, &nbits, &curr_bit,
-				       false, NULL))
+    if (ce->puncture_len > 0) {
+	/*
+	 * do_leftover version.  do_leftover is set to false on the
+	 * loop one so that code will be optimized away.
+	 */
+	if (!extract_sym(ce, true, true, bytes, nbits, &curr_bit,
+			 NULL, NULL, &sym))
 	    return 0;
-	rv = convdecode_symbol(ce, ce->leftover_bits_data);
-	if (rv)
-	    return rv;
-	ce->leftover_bits = 0;
+
+	do {
+	    rv = convdecode_symbol(ce, sym);
+	    if (rv)
+		return rv;
+	} while (extract_sym(ce, false, true, bytes, nbits, &curr_bit,
+			     NULL, NULL, &sym));
+    } else {
+	/*
+	 * do_leftover version.  do_leftover is set to false on the
+	 * loop one so that code will be optimized away.
+	 */
+	if (!extract_sym(ce, true, false, bytes, nbits, &curr_bit,
+			 NULL, NULL, &sym))
+	    return 0;
+
+	do {
+	    rv = convdecode_symbol(ce, sym);
+	    if (rv)
+		return rv;
+	} while (extract_sym(ce, false, false, bytes, nbits, &curr_bit,
+			     NULL, NULL, &sym));
     }
 
-    while (nbits >= ce->num_polys) {
-	unsigned int bits = extract_bits(bytes, curr_bit, ce->num_polys);
-
-	rv = convdecode_symbol(ce, bits);
-	if (rv)
-	    return rv;
-	curr_bit += ce->num_polys;
-	nbits -= ce->num_polys;
-    }
-    handle_new_leftover_bits(ce, bytes, nbits, curr_bit, false, NULL);
     return 0;
 }
 
@@ -1398,30 +1509,43 @@ convdecode_data_u(struct convcode *ce,
 		  const unsigned char *bytes, unsigned int nbits,
 		  const uint8_t *uncertainty)
 {
+    uint8_t out_uncertainty[CONVCODE_MAX_K];
     unsigned int curr_bit = 0;
+    convcode_symsize sym;
     int rv;
 
-    if (ce->leftover_bits) {
-	if (!process_old_leftover_bits(ce, bytes, &nbits, &curr_bit,
-				       true, uncertainty))
+    if (ce->puncture_len > 0) {
+	/*
+	 * do_leftover version.  do_leftover is set to false on the
+	 * loop one so that code will be optimized away.
+	 */
+	if (!extract_sym(ce, true, true, bytes, nbits, &curr_bit,
+			 uncertainty, out_uncertainty, &sym))
 	    return 0;
-	rv = convdecode_symbol_u(ce, ce->leftover_bits_data,
-				 ce->leftover_uncertainty);
-	if (rv)
-	    return rv;
-	ce->leftover_bits = 0;
+
+	do {
+	    rv = convdecode_symbol_u(ce, sym, out_uncertainty);
+	    if (rv)
+		return rv;
+	} while (extract_sym(ce, false, true, bytes, nbits, &curr_bit,
+			     uncertainty, out_uncertainty, &sym));
+    } else {
+	/*
+	 * do_leftover version.  do_leftover is set to false on the
+	 * loop one so that code will be optimized away.
+	 */
+	if (!extract_sym(ce, true, false, bytes, nbits, &curr_bit,
+			 uncertainty, out_uncertainty, &sym))
+	    return 0;
+
+	do {
+	    rv = convdecode_symbol_u(ce, sym, out_uncertainty);
+	    if (rv)
+		return rv;
+	} while (extract_sym(ce, false, false, bytes, nbits, &curr_bit,
+			     uncertainty, out_uncertainty, &sym));
     }
 
-    while (nbits >= ce->num_polys) {
-	unsigned int bits = extract_bits(bytes, curr_bit, ce->num_polys);
-
-	rv = convdecode_symbol_u(ce, bits, uncertainty + curr_bit);
-	if (rv)
-	    return rv;
-	curr_bit += ce->num_polys;
-	nbits -= ce->num_polys;
-    }
-    handle_new_leftover_bits(ce, bytes, nbits, curr_bit, true, uncertainty);
     return 0;
 }
 
@@ -1431,6 +1555,24 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 {
     unsigned int i, extra_bits = ce->tail_bits;
     unsigned int min_val = ce->prev_path_values[0], cstate = 0;
+
+    if (ce->puncture_len > 0) {
+	/*
+	 * If puncturing, the last bits may be punctured and thus not
+	 * there yet.  In that case, leftover_bits will be > 0 and we
+	 * need to fill them out.  Just shove in zeros until the
+	 * symbol is filled out.
+	 */
+	unsigned char byte = 0;
+	uint8_t uncertainty = 50;
+
+	while (ce->leftover_bits > 0) {
+	    if (ce->do_uncertainty)
+		convdecode_data_u(ce, &byte, 1, &uncertainty);
+	    else
+		convdecode_data(ce, &byte, 1);
+	}
+    }
 
     /* Find the minimum value in the final path. */
     if (ce->trelmap) {
@@ -1491,7 +1633,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 static FORCE_INLINE unsigned int
 backwards_one_level(struct convcode *ce, const unsigned char *bytes,
 		    const uint8_t *uncertainty, unsigned int cstate,
-		    bool do_uncertainty,
+		    bool do_uncertainty, convcode_symsize sym,
 		    unsigned int i, bool do_output,
 		    unsigned int *cuncertainty,
 		    unsigned char *outbytes,
@@ -1499,7 +1641,7 @@ backwards_one_level(struct convcode *ce, const unsigned char *bytes,
 		    unsigned int *output_uncertainty)
 {
     convcode_state pstate; /* Previous state */
-    unsigned int bit, bits, inpos;
+    unsigned int bit;
 
     pstate = get_trellis_entry(ce, i, cstate);
     bit = CONVCODE_PSTATE_BIT(pstate);
@@ -1522,14 +1664,64 @@ backwards_one_level(struct convcode *ce, const unsigned char *bytes,
 	 * Subtract off the distance we had computed to here to get the
 	 * previous uncertainty value.
 	 */
-	inpos = i * ce->num_polys;
-	bits = extract_bits(bytes, inpos, ce->num_polys);
 	*cuncertainty -= hamming_distance(ce, ce->convert[bit][pstate],
-					  bits, do_uncertainty,
-					  uncertainty + inpos);
+					  sym, do_uncertainty,
+					  uncertainty);
     }
 
     return pstate;
+}
+
+/*
+ * This very complicated routine extracts the information for a symbol
+ * as we go backwards through the trellis.  This gets the symbol and
+ * the uncertainty info for the particular output bits.
+ *
+ * When decoding, keeping all the information around about
+ * uncertainties would take a lot of memory.  Instead, we recompute it
+ * as we go back through the trellis so it doesn't have to be stored.
+ */
+static FORCE_INLINE void
+get_last_sym_info(struct convcode *ce, const unsigned char *bytes,
+		  unsigned int *inpos, const uint8_t *uncertainty,
+		  convcode_symsize *sym, uint8_t *tmp_uncertainty)
+{
+    unsigned int j;
+
+    if (ce->puncture_len > 0) {
+	/*
+	 * Puncturing, we have to take into account the fact that some
+	 * of the bits were not in the input and they had a specific
+	 * uncertainty set.
+	 */
+	for (j = 0; j < ce->num_polys; j++) {
+	    unsigned int pos = ce->num_polys - j - 1;
+
+	    if (ce->dec_puncture_pos == 0)
+		ce->dec_puncture_pos = ce->puncture_len - 1;
+	    else
+		ce->dec_puncture_pos--;
+
+	    if (ce->puncture[ce->dec_puncture_pos]) {
+		(*inpos)--;
+		if (uncertainty)
+		    tmp_uncertainty[pos] = uncertainty[*inpos];
+		*sym |= extract_bits(bytes, *inpos, 1) << pos;
+	    } else {
+		if (uncertainty)
+		    tmp_uncertainty[pos] = ce->uncertainty_100 / 2;
+	    }
+	}
+    } else {
+	/* Easier when not puncturing, just get the symbols and uncertainties */
+	if (uncertainty) {
+	    for (j = 0; j < ce->num_polys; j++)
+		tmp_uncertainty[j] = uncertainty[--(*inpos)];
+	} else {
+	    *inpos -= ce->num_polys;
+	}
+	*sym = extract_bits(bytes, *inpos, ce->num_polys);
+    }
 }
 
 int
@@ -1542,6 +1734,8 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
     int rv;
     unsigned int i, extra_bits = ce->tail_bits;
     unsigned int min_val, cuncertainty, cstate;
+    unsigned int inpos = nbits;
+    uint8_t tmp_uncertainty[CONVCODE_MAX_K];
 
     if (uncertainty)
 	rv = convdecode_data_u(ce, bytes, nbits, uncertainty);
@@ -1559,12 +1753,19 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
     i = ce->ctrellis;
 
 #if 0
+    /* Leave this in for testing, when working on this it's easier to
+       do with just one. */
     /* This leaves in all the checks in backwards_one_level(). */
     while (i > 0) {
+	convcode_symsize sym = 0;
+
 	i--;
-	cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
-				     uncertainty != NULL,
-				     i, extra_bits == 0, &cuncertainty, outbytes,
+	get_last_sym_info(ce, bytes, &inpos, uncertainty,
+			  &sym, tmp_uncertainty);
+	cstate = backwards_one_level(ce, bytes, tmp_uncertainty, cstate,
+				     uncertainty != NULL, sym,
+				     i, extra_bits == 0, &cuncertainty,
+				     outbytes,
 				     output_uncertainty != NULL,
 				     output_uncertainty);
 	if (extra_bits > 0)
@@ -1575,53 +1776,73 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
     if (output_uncertainty) {
 	if (uncertainty) {
 	    while (extra_bits > 0 && i > 0) {
+		convcode_symsize sym = 0;
+
 		i--;
-		cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
-					     true,
+		get_last_sym_info(ce, bytes, &inpos, uncertainty,
+				  &sym, tmp_uncertainty);
+		cstate = backwards_one_level(ce, bytes, tmp_uncertainty, cstate,
+					     true, sym,
 					     i, false, &cuncertainty, outbytes,
 					     true, output_uncertainty);
 		extra_bits--;
 	    }
 
 	    while (i > 0) {
+		convcode_symsize sym = 0;
+
 		i--;
-		cstate = backwards_one_level(ce, bytes, uncertainty, cstate,
-					     true,
+		get_last_sym_info(ce, bytes, &inpos, uncertainty,
+				  &sym, tmp_uncertainty);
+		cstate = backwards_one_level(ce, bytes, tmp_uncertainty, cstate,
+					     true, sym,
 					     i, true, &cuncertainty, outbytes,
 					     true, output_uncertainty);
 	    }
 	} else {
 	    while (extra_bits > 0 && i > 0) {
+		convcode_symsize sym = 0;
+
 		i--;
+		get_last_sym_info(ce, bytes, &inpos, NULL, &sym, NULL);
 		cstate = backwards_one_level(ce, bytes, NULL, cstate,
-					     false,
+					     false, sym,
 					     i, false, &cuncertainty, outbytes,
 					     true, output_uncertainty);
 		extra_bits--;
 	    }
 
 	    while (i > 0) {
+		convcode_symsize sym = 0;
+
 		i--;
+		get_last_sym_info(ce, bytes, &inpos, NULL, &sym, NULL);
 		cstate = backwards_one_level(ce, bytes, NULL, cstate,
-					     false,
+					     false, sym,
 					     i, true, &cuncertainty, outbytes,
 					     true, output_uncertainty);
 	    }
 	}
     } else {
 	while (extra_bits > 0 && i > 0) {
+	    convcode_symsize sym = 0;
+
 	    i--;
+	    get_last_sym_info(ce, bytes, &inpos, NULL, &sym, NULL);
 	    cstate = backwards_one_level(ce, bytes, NULL, cstate,
-					 false,
+					 false, sym,
 					 i, false, &cuncertainty, outbytes,
 					 false, NULL);
 	    extra_bits--;
 	}
 
 	while (i > 0) {
+	    convcode_symsize sym = 0;
+
 	    i--;
+	    get_last_sym_info(ce, bytes, &inpos, NULL, &sym, NULL);
 	    cstate = backwards_one_level(ce, bytes, NULL, cstate,
-					 false,
+					 false, sym,
 					 i, true, &cuncertainty, outbytes,
 					 false, NULL);
 	}
@@ -1849,7 +2070,8 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	 bool do_tail, convcode_state trellis_width,
 	 const char *encoded, const char *decoded,
 	 unsigned int expected_errs, uint8_t *uncertainty,
-	 unsigned int *out_uncertainties)
+	 unsigned int *out_uncertainties,
+	 char *puncture, unsigned int puncture_len)
 {
     struct test_data t;
     struct convcode *ce;
@@ -1860,6 +2082,8 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
 			do_tail, false, uncertainty != NULL, NULL, NULL);
+    if (puncture)
+	convcode_set_puncture(ce, puncture, puncture_len);
     convencode_set_output(ce, handle_test_output, &t);
     convdecode_set_output(ce, handle_test_output, &t);
     printf("Test k=%u %s err=%u polys={ 0%o", k, do_tail ? "tail" : "notail",
@@ -1954,7 +2178,7 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	    printf("  block decode invalid uncertainty at bit %u: %u %u\n", i,
 		   t.uncertainties[i], out_uncertainties[i]);
 	    rv++;
-	    goto out;
+	    //goto out;
 	}
     }
 
@@ -2014,7 +2238,8 @@ static unsigned int
 rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	  bool do_tail, convcode_state trellis_width, bool recursive,
 	  const convcode_symsize * const *convert,
-	  const convcode_state * const *next_state)
+	  const convcode_state * const *next_state,
+	  char *puncture, unsigned int puncture_len)
 {
     struct test_data t;
     struct convcode *ce;
@@ -2027,14 +2252,17 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     o->bytes_allocated = 0;
     ce = alloc_convcode(o, k, polys, npolys, len, trellis_width,
 			do_tail, recursive, false, convert, next_state);
+    if (puncture)
+	convcode_set_puncture(ce, puncture, puncture_len);
     convencode_set_output(ce, handle_test_output, &t);
     convdecode_set_output(ce, handle_test_output, &t);
     if (recursive)
 	convencode_set_output_per_symbol(ce, true);
 
-    printf("Random test k=%u %s %s polys={ 0%o", k,
-	   do_tail ? "tail" : "notail",
-	   recursive ? "recursive" : "non-recursive",
+    printf("Random test k=%u %s%s%s polys={ 0%o", k,
+	   do_tail ? " tail" : "",
+	   recursive ? " recursive" : "",
+	   puncture ? " puncture" : "",
 	   polys[0]);
     for (i = 1; i < npolys; i++)
 	printf(", 0%o", polys[i]);
@@ -2087,32 +2315,38 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "0011010010011011110100011100110111",
-			     "010111001010001", 0, NULL, NULL);
+			     "010111001010001", 0, NULL, NULL,
+			     NULL, 0);
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "0011010010011011110000011100110111",
-			     "010111001010001", 1, NULL, out_uncertainties);
+			     "010111001010001", 1, NULL, out_uncertainties,
+			     NULL, 0);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "001101001001101111010001110011",
-			     "010111001010001", 0, NULL, NULL);
+			     "010111001010001", 0, NULL, NULL,
+			     NULL, 0);
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "001101001001101111000001110011",
-			     "010111001010001", 1, NULL, out_uncertainties);
+			     "010111001010001", 1, NULL, out_uncertainties,
+			     NULL, 0);
 	}
 	errs += rand_test(3, polys, 2, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     {
 	convcode_state polys[2] = { 3, 7 };
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
-			     "0111101000110000", "101100", 0, NULL, NULL);
+			     "0111101000110000", "101100", 0, NULL, NULL,
+			     NULL, 0);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
-			     "011110100011", "101100", 0, NULL, NULL);
+			     "011110100011", "101100", 0, NULL, NULL,
+			     NULL, 0);
 	}
 	errs += rand_test(3, polys, 2, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     {
 	convcode_state polys[2] = { 5, 3 };
@@ -2129,40 +2363,46 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	};
 	if (do_tail) {
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
-			     "100111101110010111", "1001101", 0, NULL, NULL);
+			     "100111101110010111", "1001101", 0, NULL, NULL,
+			     NULL, 0);
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "110111101100010111", "1001101", 2, NULL,
-			     out_uncertainties1);
+			     out_uncertainties1,
+			     NULL, 0);
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "100111101110010111", "1001101",
-			     100, uncertainties, out_uncertainties2);
+			     100, uncertainties, out_uncertainties2,
+			     NULL, 0);
 	} else {
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
-			     "10011110111001", "1001101", 0, NULL, NULL);
+			     "10011110111001", "1001101", 0, NULL, NULL,
+			     NULL, 0);
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "11011110110001", "1001101", 2, NULL,
-			     out_uncertainties1);
+			     out_uncertainties1,
+			     NULL, 0);
 	    errs += run_test(3, polys, 2, do_tail, trellis_width,
 			     "10011110111001", "1001101",
-			     100, uncertainties, out_uncertainties2);
+			     100, uncertainties, out_uncertainties2,
+			     NULL, 0);
 	}
 	errs += rand_test(3, polys, 2, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     { /* https://komm.dev/res/convolutional-codes/ */
 	convcode_state polys[2] = { 013, 017 };
 	errs += rand_test(4, polys, 2, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     { /* https://komm.dev/res/convolutional-codes/ */
 	convcode_state polys[2] = { 027, 031 };
 	errs += rand_test(5, polys, 2, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     { /* https://komm.dev/res/convolutional-codes/ */
 	convcode_state polys[2] = { 053, 075 };
 	errs += rand_test(6, polys, 2, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     { /* Voyager */
 	convcode_state polys[2] = { 0171, 0133 };
@@ -2175,20 +2415,35 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	static unsigned int out_uncertainties[8] = {
 	    0, 0, 100, 100, 100, 100, 100, 100
 	};
+	static unsigned int out_uncertainties_puncture[8] = {
+	    0, 50, 150, 200, 200, 250, 250, 300,
+	};
+	static char puncture[] = { 1, 1, 1, 0 };
+	unsigned int puncture_len = 4;
 	if (trellis_width == 0) {
 	    /* Output uncertainties only work with full trellis width. */
 	    if (do_tail) {
 		errs += run_test(7, polys, 2, do_tail, trellis_width,
 				 "0011100010011010100111011100", "01011010",
-				 100, uncertainties, out_uncertainties);
+				 100, uncertainties, out_uncertainties,
+				 NULL, 0);
+		errs += run_test(7, polys, 2, do_tail, trellis_width,
+				 "001100100101100110110", "01011010",
+				 4, NULL, NULL,
+				 puncture, puncture_len);
+		errs += run_test(7, polys, 2, do_tail, trellis_width,
+				 "001100100101100110110", "01011010",
+				 450, uncertainties, out_uncertainties_puncture,
+				 puncture, puncture_len);
 	    } else {
 		errs += run_test(7, polys, 2, do_tail, trellis_width,
 				 "0011100010011010", "01011010",
-				 100, uncertainties, out_uncertainties);
+				 100, uncertainties, out_uncertainties,
+				 NULL, 0);
 	    }
 	}
 	errs += rand_test(7, polys, 2, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     { /* LTE */
 	convcode_state polys[3] = { 0117, 0127, 0155 };
@@ -2201,35 +2456,39 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	if (do_tail) {
 	    errs += run_test(7, polys, 3, do_tail, trellis_width,
 			     "111001101011100110011101111111100110001111",
-			     "10110111", 0, NULL, NULL);
+			     "10110111", 0, NULL, NULL,
+			     NULL, 0);
 	    if (trellis_width == 0)
 		/* Output uncertainties only work with full trellis width. */
 		errs += run_test(7, polys, 3, do_tail, trellis_width,
 				 "001001101011100110011100111111100110001011",
-				 "10110111", 4, NULL, out_uncertainties1);
+				 "10110111", 4, NULL, out_uncertainties1,
+				 NULL, 0);
 	} else {
 	    errs += run_test(7, polys, 3, do_tail, trellis_width,
 			     "111001101011100110011101",
-			     "10110111", 0, NULL, NULL);
+			     "10110111", 0, NULL, NULL,
+			     NULL, 0);
 	    if (trellis_width == 0)
 		/* Output uncertainties only work with full trellis width. */
 		errs += run_test(7, polys, 3, do_tail, trellis_width,
 				 "001001101010100010011101",
-				 "10110111", 4, NULL, out_uncertainties2);
+				 "10110111", 4, NULL, out_uncertainties2,
+				 NULL, 0);
 	}
 	errs += rand_test(7, polys, 3, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     { /* https://komm.dev/res/convolutional-codes/ */
 	convcode_state polys[2] = { 0247, 0371 };
 	errs += rand_test(8, polys, 2, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
 #if CONVCODE_MAX_K >= 9
     { /* CDMA 2000 */
 	convcode_state polys[4] = { 0671, 0645, 0473, 0537 };
 	errs += rand_test(9, polys, 4, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
 #endif
 #if CONVCODE_MAX_K >= 15
@@ -2237,7 +2496,7 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	convcode_state polys[7] = { 074000, 046321, 051271, 070535,
 	    063667, 073277, 076513 };
 	errs += rand_test(15, polys, 7, do_tail, trellis_width, false,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
 #endif
     /*
@@ -2247,24 +2506,24 @@ run_tests(bool do_tail, convcode_state trellis_width)
     {
 	convcode_state polys[2] = { 5, 5 };
 	errs += rand_test(3, polys, 2, do_tail, trellis_width, true,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     { /* Constituent code in 3GPP 25.212 Turbo Code */
 	convcode_state polys[2] = { 012, 015 };
 	errs += rand_test(4, polys, 2, do_tail, trellis_width, true,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
     {
 	convcode_state polys[2] = { 022, 021 };
 	errs += rand_test(5, polys, 2, do_tail, trellis_width, true,
-			  NULL, NULL);
+			  NULL, NULL, NULL, 0);
     }
 
     /* Test supplying our own state tables. */
     {
 	convcode_state polys[2] = { 0171, 0133 };
 	errs += rand_test(7, polys, 2, true, 0, false,
-			  convcode_convert, convcode_next_state);
+			  convcode_convert, convcode_next_state, NULL, 0);
     }
 
     printf("%u errors\n", errs);
