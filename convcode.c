@@ -1753,9 +1753,11 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
     i = ce->ctrellis;
 
 #if 0
-    /* Leave this in for testing, when working on this it's easier to
-       do with just one. */
-    /* This leaves in all the checks in backwards_one_level(). */
+    /*
+     * Leave this in for testing, when working on this it's easier to
+     * do with just one than the mess below..
+     */
+    /* This won't optimize away the checks in backwards_one_level(). */
     while (i > 0) {
 	convcode_symsize sym = 0;
 
@@ -1772,7 +1774,11 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 	    extra_bits--;
     }
 #else
-    /* Optimize away output, output_uncertainty and uncertainty checks. */
+    /*
+     * Optimize away output, output_uncertainty and uncertainty
+     * checks.  This improves performance a little bit, maybe 1%.  The
+     * majority of time is spent creating the trellis.
+     */
     if (output_uncertainty) {
 	if (uncertainty) {
 	    while (extra_bits > 0 && i > 0) {
@@ -2591,7 +2597,7 @@ insert_random_errors(uint8_t *data, unsigned int size, unsigned int count,
 		     uint8_t *uncertainty)
 {
     unsigned int i, pos;
-    bool err_pos[RAND_TEST_MAX_DECODE_SIZE] = { 0 };
+    bool *err_pos = calloc(size, 1);
 
     for (i = 0; i < count; i++) {
 	pos = rand() % size;
@@ -2603,6 +2609,7 @@ insert_random_errors(uint8_t *data, unsigned int size, unsigned int count,
 	}
 	err_pos[pos] = true;
     }
+    free(err_pos);
 }
 
 static int

@@ -8,7 +8,7 @@ ARCH = -march=nehalem
 # If you set DO_SIMD, adding -msse2 will be required.
 #ARCH += -msse2
 
-CFLAGS = -g -Wall -O2 -DCONVCODE_TESTS -DDO_SIMD=$(DO_SIMD) $(ARCH)
+CFLAGS = -g -Wall -O3 -DCONVCODE_TESTS -DDO_SIMD=$(DO_SIMD) $(ARCH)
 
 all: convcode interleave
 
