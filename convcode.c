@@ -113,22 +113,11 @@ convcode_decoded_size(unsigned int size, unsigned int num_polys, unsigned int k,
 	}
 
 	osize = size / p * puncture_len;
-
 	/*
 	 * The above doesn't count the items at the end if size is not
 	 * a multiple of puncture_len.  So get the items at the end.
 	 */
-	for (i = 0; i < size % p; i++) {
-	    osize++;
-	    if (!puncture[i])
-		osize++;
-	}
-	/* Handle puncture bits at the end. */
-	for (; osize % puncture_len != 0 && !puncture[i]; i++) {
-	    osize++;
-	}
-	/* FIXME - remove after testing. */
-	assert(i <= puncture_len);
+	osize += (size % p) * num_polys;
 	size = osize;
     }
 
