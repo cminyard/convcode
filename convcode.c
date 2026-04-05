@@ -104,7 +104,7 @@ convcode_decoded_size(unsigned int size, unsigned int num_polys, unsigned int k,
 		      unsigned int *dsize)
 {
     if (puncture) {
-	unsigned int i, osize, p = 0;
+	unsigned int i, j, osize, p = 0;
 
 	/* p is the number of bits set in the puncture. */
 	for (i = 0; i < puncture_len; i++) {
@@ -116,8 +116,22 @@ convcode_decoded_size(unsigned int size, unsigned int num_polys, unsigned int k,
 	/*
 	 * The above doesn't count the items at the end if size is not
 	 * a multiple of puncture_len.  So get the items at the end.
+	 * We go through the puncture matrix until we have found all
+	 * the values that are punctured.
 	 */
-	osize += (size % p) * num_polys;
+	for (i = 0, j = 0; j < size % p; i++) {
+	    osize++;
+	    if (puncture[i])
+		j++;
+	}
+	/*
+	 * We may have a few punctured values at the end of the
+	 * current symbol, so account for those.
+	 */
+	while (osize % num_polys != 0 && i < puncture_len && !puncture[i]) {
+	    osize++;
+	    i++;
+	}
 	size = osize;
     }
 
@@ -2812,6 +2826,7 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 		       (byte_enc_size, num_polys, k,
 			do_tail, &encoded_size2,
 			puncture, puncture_len) == 0);
+		//printf("A: %d %d\n", encoded_size, encoded_size2);
 		assert(encoded_size == encoded_size2);
 	    }
 	    if (uncertainty)
