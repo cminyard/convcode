@@ -2923,7 +2923,8 @@ output_tables(struct convcode *ce)
 static char puncture_code_12[] = { 1, 1 };
 static char puncture_code_23[] = { 1, 1, 0, 1 };
 static char puncture_code_34[] = { 1, 1, 0, 1, 1, 0 };
-static char puncture_code_78[] = { 1, 1, 0, 1, 0, 1, 0, 1, 1, 0 };
+static char puncture_code_56[] = { 1, 1, 0, 1, 1, 0, 0, 1, 1, 0 };
+static char puncture_code_78[] = { 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0 };
 
 static struct {
     char *name;
@@ -2933,7 +2934,8 @@ static struct {
     { "1/2", puncture_code_12, 2 },
     { "2/3", puncture_code_23, 4 },
     { "3/4", puncture_code_34, 6 },
-    { "7/8", puncture_code_78, 10 },
+    { "5/6", puncture_code_56, 10 },
+    { "7/8", puncture_code_78, 14 },
     { NULL }
 };
 
