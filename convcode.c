@@ -26,6 +26,22 @@
 
 #define FORCE_INLINE __attribute__((always_inline)) inline
 
+#if 0
+/* Convenience for debugging. */
+#include <stdio.h>
+static void
+print_bits(char *header, unsigned char *b, unsigned int len)
+{
+    unsigned int i;
+
+    printf("%s: ", header);
+    for (i = 0; i < len; i++) {
+	printf("%d", (b[i / 8] >> (i % 8)) & 1);
+    }
+    printf("\n");
+}
+#endif
+
 /*
  * The trellis is a two-dimensional matrix, but the size is dynamic
  * based upon how it is created.  So we use a one-dimensional matrix
@@ -173,7 +189,7 @@ convcode_encoded_bits_from_encoded_bytes
     /* Decrease until we are a multiple of 8. */
     nsyms -= nsyms % 8;
 
-    *nbits = convcode_encoded_size(size, num_polys, k, do_tail,
+    *nbits = convcode_encoded_size(nsyms, num_polys, k, do_tail,
 				   puncture, puncture_len);
 
     return 0;
@@ -841,14 +857,16 @@ convencode_block_bit(struct convcode *ce, unsigned int bit,
     if (do_puncture) {
 	while (bits_left > 0) {
 	    bool punc = !ce->puncture[ce->enc_puncture_pos];
+	    unsigned int outbit = outbits & 1;
 
 	    ce->enc_puncture_pos++;
 	    if (ce->enc_puncture_pos >= ce->puncture_len)
 		ce->enc_puncture_pos = 0;
 	    bits_left--;
+	    outbits >>= 1;
 	    if (punc)
 		continue;
-	    *outbytes |= (outbits & 1) << outbitpos;
+	    *outbytes |= outbit << outbitpos;
 	    outbitpos++;
 	    if (outbitpos >= 8) {
 		/* Finished this byte, move to the next. */
@@ -2903,9 +2921,9 @@ output_tables(struct convcode *ce)
 }
 
 static char puncture_code_12[] = { 1, 1 };
-static char puncture_code_23[] = { 1, 0, 1, 1 };
-static char puncture_code_34[] = { 1, 1, 0, 1, 0, 1 };
-static char puncture_code_78[] = { 1, 1, 1, 1, 1, 1, 1, 0 };
+static char puncture_code_23[] = { 1, 1, 0, 1 };
+static char puncture_code_34[] = { 1, 1, 0, 1, 1, 0 };
+static char puncture_code_78[] = { 1, 1, 0, 1, 0, 1, 0, 1, 1, 0 };
 
 static struct {
     char *name;
@@ -2915,7 +2933,7 @@ static struct {
     { "1/2", puncture_code_12, 2 },
     { "2/3", puncture_code_23, 4 },
     { "3/4", puncture_code_34, 6 },
-    { "7/8", puncture_code_78, 8 },
+    { "7/8", puncture_code_78, 10 },
     { NULL }
 };
 
