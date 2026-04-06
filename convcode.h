@@ -44,7 +44,7 @@ struct convcode;
  * much sense, and it lets us loop unroll a bit for optimization.
  */
 #define CONVCODE_MIN_K 3
-#define CONVCODE_MAX_K 16
+#define CONVCODE_MAX_K 8
 #if (CONVCODE_MAX_K <= 8)
 typedef uint8_t convcode_state;
 #elif (CONVCODE_MAX_K <= 16)
@@ -385,6 +385,8 @@ void convencode_set_byte_span(struct convcode *ce, bool do_span);
  *
  * If total_out_bits is not NULL, the total number of bits generated
  * into outbytes will be returned there.
+ *
+ * Note that the outbytes buffer must be zero-ed before you call this.
  */
 void convencode_block(struct convcode *ce,
 		      const unsigned char *bytes, unsigned int nbits,
@@ -397,6 +399,8 @@ void convencode_block(struct convcode *ce,
  *
  * This will automatically do the span optimization if it can,
  * see the comment on convencode_set_byte_span() for details.
+ *
+ * Note that the outbytes buffer must be zero-ed before you call this.
  */
 void convencode_block_partial(struct convcode *ce,
 			      const unsigned char *bytes, unsigned int nbits,
@@ -508,6 +512,8 @@ int convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
  * output_uncertainty will not be correct.  The previous state data is
  * lost because paths are discarding, and keeping that data around
  * would use a lot of memory.
+ *
+ * Note that the outbytes buffer must be zero-ed before you call this.
  *
  * Returns nonzero on an error.
  */

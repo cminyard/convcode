@@ -1988,7 +1988,7 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  * To supply your own input and output, run as:
  *
  * ./convcode [-t] [-j] [-c] [-g] [-u] [-b] [-m <size>] [-l <loops] [-x]
- *        [-w <trellis width>]
+ *        [-w <trellis width>] [-er <rate>]
  *        [-s <start state>] [-i <init_val>]
  *        -p <poly1> [ -p <poly2> ... ] k <bits>
  *
@@ -2049,11 +2049,14 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
  *    -r - Do recursive.
  *    -m - Set the buffer size to encode.  Defaults to 256 bits (32 bytes).
  *    -u - Do uncertainty.
+ *    -er - Set the error rate.  This is float of the probability of an
+ *         error per bit.  Like 1e-3 sets a 1 in 1000 chance of an error
+ *         per bit (BER).
  * All other options are ignored
  *
  * The output is:
  *
- *   Inj 17, detected_errs: 16722 (16.72), decode_errs: 31 (0.03), failures: 8 (0.80%)
+ *   Inj 17000, detected_errs: 16722 (16.72), decode_errs: 31 (0.03), failures: 8 (0.80%)
  *
  * Where:
  *   Inj - the number of errors injected in each loop iteraction.
@@ -2541,7 +2544,7 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	static unsigned int out_uncertainties_puncture[8] = {
 	    0, 50, 150, 200, 200, 250, 250, 300,
 	};
-	static char puncture[] = { 1, 1, 1, 0 };
+	static char puncture[] = { 1, 1, 0, 1 };
 	unsigned int puncture_len = 4;
 	if (trellis_width == 0) {
 	    /* Output uncertainties only work with full trellis width. */
@@ -2567,6 +2570,8 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	}
 	errs += rand_test(7, polys, 2, do_tail, trellis_width, false,
 			  NULL, NULL, NULL, 0);
+	errs += rand_test(7, polys, 2, do_tail, trellis_width, false,
+			  NULL, NULL, puncture, puncture_len);
     }
     { /* LTE */
 	convcode_state polys[3] = { 0117, 0127, 0155 };
@@ -2709,24 +2714,42 @@ setup_uncertainty(uint8_t *uncertainty, unsigned int size)
 	uncertainty[i] = normal_dist[rand() % normal_dist_size];
 }
 
-static void
+static unsigned int
 insert_random_errors(uint8_t *data, unsigned int size, unsigned int count,
-		     uint8_t *uncertainty)
+		     double error_rate, uint8_t *uncertainty)
 {
     unsigned int i, pos;
-    bool *err_pos = calloc(size, 1);
 
-    for (i = 0; i < count; i++) {
-	pos = rand() % size;
-	if (err_pos[pos]) /* Already put an error here. */
-	    continue;
-	data[pos / 8] ^= 1 << (pos % 8);
-	if (uncertainty) {
-	    uncertainty[pos] = 50 - normal_dist[rand() % normal_dist_size];
+    if (error_rate > 0) {
+	unsigned int error_rate_inv = 1 / error_rate;
+
+	count = 0;
+	for (i = 0; i < size; i++) {
+	    if (rand() % error_rate_inv != 1)
+		continue;
+	    data[i / 8] ^= 1 << (i % 8);
+	    if (uncertainty) {
+		uncertainty[i] = 50 - normal_dist[rand() % normal_dist_size];
+	    }
+	    count++;
 	}
-	err_pos[pos] = true;
+    } else {
+	bool *err_pos = calloc(size, 1);
+
+	for (i = 0; i < count; i++) {
+	    pos = rand() % size;
+	    if (err_pos[pos]) /* Already put an error here. */
+		continue;
+	    data[pos / 8] ^= 1 << (pos % 8);
+	    if (uncertainty) {
+		uncertainty[pos] = 50 - normal_dist[rand() % normal_dist_size];
+	    }
+	    err_pos[pos] = true;
+	}
+	free(err_pos);
     }
-    free(err_pos);
+
+    return count;
 }
 
 static int
@@ -2740,7 +2763,7 @@ static int
 err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	     unsigned int trellis_width, bool do_tail, bool recursive,
 	     bool do_uncertainty, bool do_tail_biting, bool one_loop,
-	     unsigned int num_loops, unsigned int size,
+	     unsigned int num_loops, unsigned int size, double error_rate,
 	     char *puncture, unsigned int puncture_len)
 {
     /* NOTE: size is in bits. */
@@ -2752,9 +2775,13 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
     unsigned int byte_size; /* Byte count for data to be encoded. */
     unsigned int enc_size; /* Bits require for the encoded data. */
     unsigned int byte_enc_size; /* Byte count for encoded data. */
+    unsigned int tot_inj_errs = 0;
 
     if (do_tail_biting)
 	do_tail = false;
+
+    if (error_rate > 0.0)
+	one_loop = true;
 
     enc_size = convcode_encoded_size(size, num_polys, k, do_tail,
 				     puncture, puncture_len);
@@ -2831,8 +2858,9 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	    }
 	    if (uncertainty)
 		setup_uncertainty(uncertainty, encoded_size);
-	    insert_random_errors(encoded, encoded_size, inserted_errors,
-				 uncertainty);
+	    tot_inj_errs += insert_random_errors(encoded, encoded_size,
+						 inserted_errors,
+						 error_rate, uncertainty);
 	    if (do_tail_biting) {
 		/* Shove in the first run of the data. */
 		if (uncertainty)
@@ -2852,7 +2880,7 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 	}
 	if (do_uncertainty) {
 	    printf("Inj %u, uncertainty: %.2f, decode_errs: %u (%.2f), failures: %u (%.2f%%)\n",
-		   inserted_errors,
+		   tot_inj_errs,
 		   ((float) detected_errors / (num_loops * RAND_TEST_SIZE)),
 		   decode_errors,
 		   ((float) decode_errors / num_loops),
@@ -2860,7 +2888,7 @@ err_inj_test(unsigned int k, convcode_state *polys, unsigned int num_polys,
 		   ((float) decode_failures * 100 / num_loops));
 	} else {
 	    printf("Inj %u, detected_errs: %u (%.2f), decode_errs: %u (%.2f), failures: %u (%.2f%%)\n",
-		   inserted_errors,
+		   tot_inj_errs,
 		   detected_errors,
 		   ((float) detected_errors / num_loops),
 		   decode_errors,
@@ -2960,6 +2988,7 @@ main(int argc, char *argv[])
     convcode_state trellis_width = 0;
     char *puncture_code = NULL;
     unsigned int puncture_code_len = 0;
+    double error_rate = -1.0;
 
     for (arg = 1; arg < argc; arg++) {
 	if (argv[arg][0] != '-')
@@ -3002,6 +3031,13 @@ main(int argc, char *argv[])
 		return 1;
 	    }
 	    polys[num_polys++] = strtoul(argv[arg], NULL, 0);
+	} else if (strcmp(argv[arg], "-er") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -er\n");
+		return 1;
+	    }
+	    error_rate = strtod(argv[arg], NULL);
 	} else if (strcmp(argv[arg], "-l") == 0) {
 	    arg++;
 	    if (arg >= argc) {
@@ -3062,7 +3098,7 @@ main(int argc, char *argv[])
 	return err_inj_test(k, polys, num_polys, trellis_width,
 			    do_tail, recursive, do_uncertainty, do_tail_biting,
 			    do_cpu_usage,
-			    err_inj_loops, err_inj_size,
+			    err_inj_loops, err_inj_size, error_rate,
 			    puncture_code, puncture_code_len);
 
     if (decode && arg < argc) {
