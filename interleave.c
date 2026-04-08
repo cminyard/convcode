@@ -6,6 +6,8 @@
 
 #include "interleave.h"
 
+#define FORCE_INLINE __attribute__((always_inline)) inline
+
 void
 interleaver_init(struct interleaver *di,
 		 unsigned int interleave,
@@ -26,7 +28,7 @@ interleaver_init(struct interleaver *di,
     }
 }
 
-static void
+static FORCE_INLINE void
 interleaver_calc_pos(struct interleaver *di,
 		     unsigned int *byte, unsigned int *bit)
 {
@@ -36,7 +38,7 @@ interleaver_calc_pos(struct interleaver *di,
     *bit = bitpos % 8;
 }
 
-static void
+static FORCE_INLINE void
 interleaver_next_bit(struct interleaver *di)
 {
     di->row++;
@@ -69,8 +71,8 @@ interleave(unsigned int interleave,
     }
 }
 
-unsigned int
-interleave_bit(struct interleaver *di)
+static FORCE_INLINE unsigned int
+interleave_bit_i(struct interleaver *di)
 {
     unsigned int byte, bit;
     unsigned int rv;
@@ -84,8 +86,14 @@ interleave_bit(struct interleaver *di)
     return rv;
 }
 
-void
-deinterleave_bit(struct interleaver *di, unsigned int bitval)
+unsigned int
+interleave_bit(struct interleaver *di)
+{
+    return interleave_bit_i(di);
+}
+
+static FORCE_INLINE void
+deinterleave_bit_i(struct interleaver *di, unsigned int bitval)
 {
     unsigned int byte, bit;
 
@@ -94,6 +102,52 @@ deinterleave_bit(struct interleaver *di, unsigned int bitval)
     di->data[byte] |= bitval << bit;
 
     interleaver_next_bit(di);
+}
+
+void
+deinterleave_bit(struct interleaver *di, unsigned int bitval)
+{
+    deinterleave_bit_i(di, bitval);
+}
+
+void
+interleave_block(unsigned int interleave_len, uint8_t *indata,
+		 uint8_t *outdata, unsigned int total_bits)
+{
+    struct interleaver di;
+    unsigned int outbit, i;
+
+    interleaver_init(&di, interleave_len, indata, total_bits);
+
+    for (i = 0, outbit = 0; i < total_bits; i++) {
+	*outdata |= interleave_bit_i(&di) << outbit;
+	if (outbit == 7) {
+	    outbit = 0;
+	    outdata++;
+	} else {
+	    outbit++;
+	}
+    }
+}
+
+void
+deinterleave_block(unsigned int interleave_len, uint8_t *indata,
+		   uint8_t *outdata, unsigned int total_bits)
+{
+    struct interleaver di;
+    unsigned int inbit, i;
+
+    interleaver_init(&di, interleave_len, outdata, total_bits);
+
+    for (i = 0, inbit = 0; i < total_bits; i++) {
+	deinterleave_bit_i(&di, (*indata >> inbit) & 1);
+	if (inbit == 7) {
+	    inbit = 0;
+	    indata++;
+	} else {
+	    inbit++;
+	}
+    }
 }
 
 #ifdef CONVCODE_TESTS
@@ -132,6 +186,7 @@ print_data(uint8_t *data, unsigned int nbits)
 	    bit = 0;
 	}
     }
+    printf("\n");
 }
 
 static uint8_t *
@@ -171,8 +226,8 @@ rand_test(void)
     printf("Running test interleave size %u length %d\n", interleave_len, len);
 
     data = calloc(len, 1);
-    idata = calloc(len / 8 + 1, 1);
-    odata = calloc(len / 8 + 1, 1);
+    idata = calloc((len + 7) / 8, 1);
+    odata = calloc((len + 7) / 8, 1);
 
     for (i = 0; i < len; i++)
 	idata[i / 8] |= (rand() & 1) << (i % 8);
@@ -185,8 +240,17 @@ rand_test(void)
     for (i = 0; i < len; i++)
 	deinterleave_bit(&di, data[i]);
 
-    if (memcmp(idata, odata, len / 8  + 1) != 0) {
+    if (memcmp(idata, odata, (len + 7) / 8) != 0) {
 	printf("  Failed\n");
+	rv = 1;
+    }
+
+    memset(data, 0, (len + 7) / 8);
+    memset(odata, 0, (len + 7) / 8);
+    interleave_block(interleave_len, idata, data, len);
+    deinterleave_block(interleave_len, data, odata, len);
+    if (memcmp(idata, odata, (len + 7) / 8) != 0) {
+	printf("  Failed block\n");
 	rv = 1;
     }
 
@@ -283,7 +347,7 @@ main(int argc, char *argv[])
 
     free(data);
 
-    printf("\n  bits = %u\n", len);
+    printf("  bits = %u\n", len);
     return 0;
 }
 #endif

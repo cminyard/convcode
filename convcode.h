@@ -44,7 +44,7 @@ struct convcode;
  * much sense, and it lets us loop unroll a bit for optimization.
  */
 #define CONVCODE_MIN_K 3
-#define CONVCODE_MAX_K 8
+#define CONVCODE_MAX_K 16
 #if (CONVCODE_MAX_K <= 8)
 typedef uint8_t convcode_state;
 #elif (CONVCODE_MAX_K <= 16)

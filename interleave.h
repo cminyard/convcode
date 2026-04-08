@@ -117,9 +117,19 @@ unsigned int interleave_bit(struct interleaver *di);
  * the data.  Be sure not to call this more than total_bits or you
  * will overrun the array.
  *
- * The input bits should come in interleaved order and will be store
+ * The input bits should come in interleaved order and will be stored
  * in the data array in original order.
  */
 void deinterleave_bit(struct interleaver *di, unsigned int bitval);
+
+/*
+ * Interleave and deinterleave blocks of data, as above, but with
+ * input and output blocks of data.  Note that outdata must be zero-ed
+ * before calling this.
+ */
+void interleave_block(unsigned int interleave_len, uint8_t *indata,
+		      uint8_t *outdata, unsigned int total_bits);
+void deinterleave_block(unsigned int interleave_len, uint8_t *indata,
+			uint8_t *outdata, unsigned int total_bits);
 
 #endif /* INTERLEAVE_H */
