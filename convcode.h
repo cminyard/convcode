@@ -219,6 +219,10 @@ void convencode_set_output_per_symbol(struct convcode *ce, bool val);
  * output-per-symbol.  You will get whole symbols still and you will
  * have to do the puncture yourself.  They also do not work if you
  * feed the data in per symbol with convdecode_symbol().
+ *
+ * Note: Puncturing may have issues, it may be a bug that I'm seeing
+ * in the tests, but it may be just that puncturing doesn't always
+ * work well.
  */
 void convcode_set_puncture(struct convcode *ce, const char *puncture_array,
 			   unsigned int puncture_array_len);
