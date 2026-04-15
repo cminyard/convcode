@@ -256,11 +256,13 @@ void convcode_set_puncture(struct convcode *ce, const char *puncture_array,
  *
  * On the decode side, get the whole packet then feed it through once.
  * This should put the decoder into the same state the encoder was at
- * when it started transmitting data.  Then call
- * reinit_convdecode_tail_bite(), which will re-initialize the decoder
- * but leave the states.  Then feed the entire packet through to get
- * the actual data output.  You can feed only the end of the data
- * through on the first iteration, but that doesn't work as reliably.
+ * when it started transmitting data.  Do not do something that will
+ * finish the decode operation, like convdecode_block() will.  Then
+ * call reinit_convdecode_tail_bite(), which will re-initialize the
+ * decoder but leave the states.  Then feed the entire packet through
+ * to get the actual data output.  You need to finish the decode
+ * operation this time.  You can feed only the end of the data through
+ * on the first iteration, but that doesn't work as reliably.
  */
 
 /*
@@ -270,7 +272,7 @@ void convcode_set_puncture(struct convcode *ce, const char *puncture_array,
  * uncertain) a particular bit is to be correct.  For instance, when
  * doing phase decoding, if you are right on phase, then you would be
  * 0% uncertain that the value was incorrect.  If it was half-way
- * beteen two expected phase values, you would be 50% uncertain the
+ * between two expected phase values, you would be 50% uncertain the
  * value was correct.  It's easier to work with uncertainty than
  * certainty, even if the English is awkward.
  *
@@ -307,6 +309,9 @@ void reinit_convencode(struct convcode *ce);
  * Returns non-zero on error
  */
 int reinit_convdecode(struct convcode *ce);
+
+/* Like the above, but get ready for a tail bite second run. */
+int reinit_convdecode_tail_bite(struct convcode *ce);
 
 /*
  * Call both of the the above functions.

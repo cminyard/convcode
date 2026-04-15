@@ -47,12 +47,15 @@ provide.  This is quite useful for testing performance.
 A convolutional decoder can use a lot of memory.  "k" represents the
 number of bits in the polynomial.  The trellis is 2 ^ (k -1) entries
 wide, and your trellis must have as many entries as you expect to
-decode.  The convcode.h file has details on memory usage.  If you want
-a 7-bit k and 
+decode plus the tail.  The convcode.h file has details on memory
+usage.  If you want a 7-bit k and a 256 bit (32 byte) message decoded
+message, that's (256 + 6) * 2^6 entries in the trellis table, or 16640
+entries.  The entry size depends on the K setting, it can be 1, 2, or
+4 bytes.
 
 You can save space at the expense of performance by using a partial
 trellis.  See the discussion of the trellis\_width parameter to
-alloc\_convcode() for details.  This reduced performance.
+alloc\_convcode() for details.  This reduces performance.
 
 You can also code in blocks.  This shortens the trellis and so reduce
 the amount of memory used.  It does add a tail to each block unless
