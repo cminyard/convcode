@@ -2547,8 +2547,9 @@ run_tests(bool do_tail, convcode_state trellis_width)
 	static unsigned int out_uncertainties[8] = {
 	    0, 0, 100, 100, 100, 100, 100, 100
 	};
-	static unsigned int out_uncertainties_puncture[8] = {
-	    0, 50, 150, 200, 200, 250, 250, 300,
+	static unsigned int out_uncertainties_puncture[16] = {
+	      0,  50, 150, 200, 200, 250, 250, 300,
+	    300, 350, 350, 400, 400, 450, 450, 500
 	};
 	static char puncture[] = { 1, 1, 0, 1 };
 	unsigned int puncture_len = 4;
