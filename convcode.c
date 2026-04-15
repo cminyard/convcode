@@ -2089,11 +2089,16 @@ convdecode_block(struct convcode *ce, const unsigned char *bytes,
 #include <assert.h>
 #include <time.h>
 
+static bool ignore_output;
+
 static int
 handle_output(struct convcode *ce, void *output_data, unsigned char byte,
 	      unsigned int nbits)
 {
     unsigned int i;
+
+    if (ignore_output)
+	return 0;
 
     for (i = 0; i < nbits; i++) {
 	if (byte & 1)
@@ -2106,7 +2111,7 @@ handle_output(struct convcode *ce, void *output_data, unsigned char byte,
 }
 
 static void
-do_encode_data(struct convcode *ce, const char *input, unsigned int *total_bits)
+do_encode_data(struct convcode *ce, const char *input)
 {
     unsigned int i, nbits;
     unsigned char byte = 0;
@@ -2123,7 +2128,6 @@ do_encode_data(struct convcode *ce, const char *input, unsigned int *total_bits)
     }
     if (nbits > 0)
 	convencode_data(ce, &byte, nbits);
-    convencode_finish(ce, total_bits);
 }
 
 static void
@@ -2137,8 +2141,7 @@ do_decode_one_data(struct convcode *ce, unsigned char *bytes,
 }
 
 static void
-do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
-	       unsigned int *num_errs, uint8_t *uncertainty)
+do_decode_data(struct convcode *ce, const char *input, uint8_t *uncertainty)
 {
     unsigned int i, nbits;
     unsigned char byte = 0;
@@ -2157,7 +2160,6 @@ do_decode_data(struct convcode *ce, const char *input, unsigned int *total_bits,
     }
     if (nbits > 0)
 	do_decode_one_data(ce, &byte, nbits, uncertainty);
-    convdecode_finish(ce, total_bits, num_errs);
 }
 
 #define RAND_TEST_SIZE (256)
@@ -2219,7 +2221,8 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
     printf(" } %u bits %lu bytes alloc\n", len, o->bytes_allocated);
     t.outpos = 0;
     if (expected_errs == 0) {
-	do_encode_data(ce, decoded, &enc_nbits);
+	do_encode_data(ce, decoded);
+	convencode_finish(ce, &enc_nbits);
 	t.output[t.outpos] = '\0';
 	if (strcmp(encoded, t.output) != 0) {
 	    printf("  encode failure, expected\n    %s\n  got\n    %s\n",
@@ -2234,7 +2237,8 @@ run_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	}
 	t.outpos = 0;
     }
-    do_decode_data(ce, encoded, &dec_nbits, &num_errs, uncertainty);
+    do_decode_data(ce, encoded, uncertainty);
+    convdecode_finish(ce, &dec_nbits, &num_errs);
     t.output[t.outpos] = '\0';
     if (strcmp(decoded, t.output) != 0) {
 	printf("  decode failure, expected\n    %s\n  got\n    %s\n",
@@ -2401,11 +2405,13 @@ rand_test(unsigned int k, convcode_state *polys, unsigned int npolys,
 	    decoded[bit] = 0;
 	    t.outpos = 0;
 	    reinit_convcode(ce);
-	    do_encode_data(ce, decoded, &total_bits);
+	    do_encode_data(ce, decoded);
+	    convencode_finish(ce, &total_bits);
 	    memcpy(encoded, t.output, t.outpos);
 	    encoded[t.outpos] = '\0';
 	    t.outpos = 0;
-	    do_decode_data(ce, encoded, &total_bits, &num_errs, NULL);
+	    do_decode_data(ce, encoded, NULL);
+	    convdecode_finish(ce, &total_bits, &num_errs);
 	    t.output[t.outpos] = '\0';
 	    if (strcmp(t.output, decoded) != 0) {
 		printf("  decode failure, expected\n    %s\n  got\n    %s\n",
@@ -3131,11 +3137,35 @@ main(int argc, char *argv[])
     }
 
     printf("  ");
-    if (decode) {
-	do_decode_data(ce, argv[arg], &total_bits, &num_errs, NULL);
-	printf("\n  errors = %u", num_errs);
+    if (do_tail_biting) {
+	if (decode) {
+	    ignore_output = true;
+	    do_decode_data(ce, argv[arg], NULL);
+	    ignore_output = false;
+	    reinit_convdecode_tail_bite(ce);
+	    do_decode_data(ce, argv[arg], NULL);
+	    convdecode_finish(ce, &total_bits, &num_errs);
+	    printf("\n  errors = %u", num_errs);
+	} else {
+	    /*
+	     * Feed the last k-1 bits into the encoder, but ignore the
+	     * output.
+	     */
+	    ignore_output = true;
+	    do_encode_data(ce, argv[arg] + (strlen(argv[arg]) - (k - 1)));
+	    ignore_output = false;
+	    do_encode_data(ce, argv[arg]);
+	    convencode_finish(ce, &total_bits);
+	}
     } else {
-	do_encode_data(ce, argv[arg], &total_bits);
+	if (decode) {
+	    do_decode_data(ce, argv[arg], NULL);
+	    convdecode_finish(ce, &total_bits, &num_errs);
+	    printf("\n  errors = %u", num_errs);
+	} else {
+	    do_encode_data(ce, argv[arg]);
+	    convencode_finish(ce, &total_bits);
+	}
     }
 
     printf("\n  bits = %u\n", total_bits);
