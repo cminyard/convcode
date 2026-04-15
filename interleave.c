@@ -171,12 +171,20 @@ deinterleave_block(unsigned int interleave_len, uint8_t *indata,
 #include <time.h>
 
 static void
-print_data(uint8_t *data, unsigned int nbits)
+print_data(uint8_t *data, unsigned int nbits, char *xormask)
 {
-    unsigned int i, byte, bit;
+    unsigned int i, j, byte, bit;
 
-    for (i = 0, byte = 0, bit = 0; i < nbits; i++) {
-	if (data[byte] & (1 << bit))
+    for (i = 0, byte = 0, bit = 0, j = 0; i < nbits; i++) {
+	unsigned int b = (data[byte] >> bit) & 1;
+
+	if (xormask[j] == '1')
+	    b = !b;
+	j++;
+	if (!xormask[j])
+	    j = 0;
+
+	if (b)
 	    printf("1");
 	else
 	    printf("0");
@@ -186,7 +194,6 @@ print_data(uint8_t *data, unsigned int nbits)
 	    bit = 0;
 	}
     }
-    printf("\n");
 }
 
 static uint8_t *
@@ -275,9 +282,18 @@ run_tests(void)
     return !!errs;
 }
 
+static char *xormask = "0";
+static unsigned int xorpos;
+
 static void
 out_bit(void *user_data, unsigned int bit)
 {
+    if (xormask[xorpos] == '1')
+	bit = !bit;
+    xorpos++;
+    if (!xormask[xorpos])
+	xorpos = 0;
+
     printf("%d", bit);
 }
 
@@ -287,8 +303,11 @@ main(int argc, char *argv[])
     unsigned int interleave_len;
     uint8_t *data;
     int arg;
-    unsigned int i, len;
+    unsigned int i, len, b;
     bool decode = false, test = false;
+    unsigned int block_size = 0;
+    static char *xorin = "0";
+    static char *xorout = "0";
 
     for (arg = 1; arg < argc; arg++) {
 	if (argv[arg][0] != '-')
@@ -299,6 +318,27 @@ main(int argc, char *argv[])
 	    decode = false;
 	} else if (strcmp(argv[arg], "-t") == 0) {
 	    test = true;
+	} else if (strcmp(argv[arg], "-b") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -b\n");
+		return 1;
+	    }
+	    block_size = strtoul(argv[arg], NULL, 0);
+	} else if (strcmp(argv[arg], "-xi") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -xi\n");
+		return 1;
+	    }
+	    xorin = argv[arg];
+	} else if (strcmp(argv[arg], "-xo") == 0) {
+	    arg++;
+	    if (arg >= argc) {
+		fprintf(stderr, "No data supplied for -xo\n");
+		return 1;
+	    }
+	    xorout = argv[arg];
 	} else {
 	    fprintf(stderr, "unknown option: %s\n", argv[arg]);
 	    return 1;
@@ -330,17 +370,40 @@ main(int argc, char *argv[])
 	printf("Unable to allocate data block\n");
 	return 1;
     }
+    if (len == 0)
+	return 0;
+
+    if (block_size == 0)
+	block_size = len;
+
     if (decode) {
 	struct interleaver di;
 
-	interleaver_init(&di, interleave_len, data, len);
-	for (i = 0; argv[arg][i]; i++) {
-	    if (argv[arg][i] == '1')
-		deinterleave_bit(&di, 1);
-	    else
-		deinterleave_bit(&di, 0);
+	for (i = 0; i < len; ) {
+	    unsigned int j;
+
+	    memset(data, 0, len);
+	    interleaver_init(&di, interleave_len, data, block_size);
+	    for (b = 0, j = 0; b < block_size; b++) {
+		unsigned int bit;
+
+		if (i < len && argv[arg][i] == '1')
+		    bit = 1;
+		else
+		    bit = 0;
+
+		if (xorin[j] == '1')
+		    bit = !bit;
+		j++;
+		if (!xorin[j])
+		    j = 0;
+		deinterleave_bit(&di, bit);
+
+		i++;
+	    }
+	    print_data(data, block_size, xorout);
 	}
-	print_data(data, len);
+	printf("\n");
     } else {
 	interleave(interleave_len, data, len, out_bit, NULL);
     }
