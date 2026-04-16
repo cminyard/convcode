@@ -15,7 +15,6 @@
 #define DEBUG_ASSERT(x) do {} while(0)
 #endif
 
-#include "convcode_os_funcs.h"
 #include "convcode.h"
 
 #define CONVCODE_DEBUG_STATES 0
