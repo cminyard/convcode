@@ -1670,7 +1670,11 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 		  unsigned int *num_errs)
 {
     unsigned int i, extra_bits = ce->tail_bits;
-    unsigned int min_val = ce->prev_path_values[0], cstate = 0;
+    unsigned int min_val = 0, cstate;
+
+    if (ce->ctrellis < ce->tail_bits)
+	/* Not enough data input to do anything. */
+	goto out;
 
     if (ce->puncture_len > 0) {
 	/*
@@ -1690,10 +1694,12 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
 	}
     }
 
+    min_val = ce->prev_path_values[0];
+    cstate = 0;
+
     /* Find the minimum value in the final path. */
     if (ce->trelmap) {
 	/* Minimum value is always at 0 because it's sorted. */
-	cstate = 0;
     } else {
 	for (i = 1; i < ce->num_states; i++) {
 	    if (ce->prev_path_values[i] < min_val) {
@@ -1734,6 +1740,7 @@ convdecode_finish(struct convcode *ce, unsigned int *total_out_bits,
     if (ce->dec_out.out_bit_pos > 0)
 	ce->dec_out.output(ce, ce->dec_out.user_data,
 			   ce->dec_out.out_bits, ce->dec_out.out_bit_pos);
+ out:
     if (num_errs)
 	*num_errs = min_val;
     if (total_out_bits)
@@ -1984,16 +1991,23 @@ convdecode_last_n_block(struct convcode *ce,
 			unsigned int *num_errs)
 {
     unsigned int i, j, extra_bits = ce->tail_bits;
-    unsigned int min_val = ce->prev_path_values[0], cstate = 0;
+    unsigned int min_val = 0, cstate;
+
+    if (ce->ctrellis < ce->tail_bits) {
+	/* Not enough data input to do anything. */
+	noutbits = 0;
+	goto out;
+    }
 
     if (noutbits > ce->ctrellis - ce->tail_bits)
 	noutbits = ce->ctrellis - ce->tail_bits;
     j = noutbits;
 
+    min_val = ce->prev_path_values[0];
+    cstate = 0;
     /* Find the minimum value in the final path. */
     if (ce->trelmap) {
 	/* Minimum value is always at 0 because it's sorted. */
-	cstate = 0;
     } else {
 	for (i = 1; i < ce->num_states; i++) {
 	    if (ce->prev_path_values[i] < min_val) {
@@ -2024,7 +2038,7 @@ convdecode_last_n_block(struct convcode *ce,
 	if (extra_bits > 0)
 	    extra_bits--;
     }
-
+ out:
     if (num_errs)
 	*num_errs = min_val;
     if (total_out_bits)
