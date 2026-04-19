@@ -318,6 +318,12 @@ int reinit_convdecode(struct convcode *ce);
 int reinit_convdecode_tail_bite(struct convcode *ce);
 
 /*
+ * Like the above, but preserve last_bits trellis entries at the end
+ * of the trellis.
+ */
+int reinit_convdecode_last_bits(struct convcode *ce, unsigned int last_bits);
+
+/*
  * Call both of the the above functions.
  */
 void reinit_convcode(struct convcode *ce);

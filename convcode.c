@@ -234,9 +234,10 @@ get_min_pos(struct convcode *ce)
 }
 
 static int
-reinit_convdecode_i(struct convcode *ce, bool tail_bite)
+reinit_convdecode_i(struct convcode *ce, bool tail_bite,
+		    unsigned int last_bits)
 {
-    unsigned int i, cstate;
+    unsigned int i, j, cstate;
 
     if (!ce->prev_path_values)
 	return 1;
@@ -245,11 +246,16 @@ reinit_convdecode_i(struct convcode *ce, bool tail_bite)
     ce->dec_out.out_bit_pos = 0;
     ce->dec_out.total_out_bits = 0;
 
-    if (tail_bite) {
+    if (tail_bite || last_bits) {
 	cstate = get_min_pos(ce);
 	if (ce->trelmap)
 	    ce->trelmap[cstate] = 0;
 	ce->prev_path_values[cstate] = 0;
+	for (i = 0; i < last_bits; i++) {
+	    for (j = 0; j < ce->trelw; j++)
+		set_trellis_entry(ce, i, j,
+			get_trellis_entry(ce, i + ce->ctrellis - last_bits, j));
+	}
     } else {
 	ce->prev_path_values[CONVCODE_DEFAULT_START_STATE] = 0;
 	for (i = 0; i < ce->num_states; i++) {
@@ -282,7 +288,7 @@ reinit_convdecode_i(struct convcode *ce, bool tail_bite)
 	    }
 	}
     }
-    ce->ctrellis = 0;
+    ce->ctrellis = last_bits;
     ce->leftover_bits = 0;
     ce->dec_puncture_pos = 0;
     return 0;
@@ -291,13 +297,19 @@ reinit_convdecode_i(struct convcode *ce, bool tail_bite)
 int
 reinit_convdecode(struct convcode *ce)
 {
-    return reinit_convdecode_i(ce, false);
+    return reinit_convdecode_i(ce, false, 0);
 }
 
 int
 reinit_convdecode_tail_bite(struct convcode *ce)
 {
-    return reinit_convdecode_i(ce, true);
+    return reinit_convdecode_i(ce, true, 0);
+}
+
+int
+reinit_convdecode_last_bits(struct convcode *ce, unsigned int last_bits)
+{
+    return reinit_convdecode_i(ce, false, last_bits);
 }
 
 void
@@ -3259,6 +3271,12 @@ main(int argc, char *argv[])
     } else {
 	if (decode) {
 	    do_decode_data(ce, argv[arg], NULL);
+	    arg++;
+	    while (arg < argc) {
+		reinit_convdecode_last_bits(ce, 4);
+		do_decode_data(ce, argv[arg], NULL);
+		arg++;
+	    }
 	    convdecode_finish(ce, &total_bits, &num_errs);
 	    printf("\n  errors = %u", num_errs);
 	} else {
