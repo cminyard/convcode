@@ -960,19 +960,19 @@ convencode_block_partial(struct convcode *ce,
 
 void
 convencode_block_final(struct convcode *ce,
-		       unsigned char *outbytes, unsigned int outbitpos)
+		       unsigned char **outbytes, unsigned int *outbitpos)
 {
     unsigned int i;
 
     if (ce->puncture_len > 0) {
 	for (i = 0; i < ce->tail_bits; i++)
-	    convencode_block_bit(ce, 0, false, true, &outbytes, &outbitpos);
+	    convencode_block_bit(ce, 0, false, true, outbytes, outbitpos);
     } else if (ce->optimize_no_span) {
 	for (i = 0; i < ce->tail_bits; i++)
-	    convencode_block_bit(ce, 0, false, false, &outbytes, &outbitpos);
+	    convencode_block_bit(ce, 0, false, false, outbytes, outbitpos);
     } else {
 	for (i = 0; i < ce->tail_bits; i++)
-	    convencode_block_bit(ce, 0, true, false, &outbytes, &outbitpos);
+	    convencode_block_bit(ce, 0, true, false, outbytes, outbitpos);
     }
 }
 

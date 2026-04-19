@@ -416,7 +416,7 @@ void convencode_block_partial(struct convcode *ce,
 			      unsigned char **outbytes,
 			      unsigned int *outbitpos);
 void convencode_block_final(struct convcode *ce,
-			    unsigned char *outbytes, unsigned int outbitpos);
+			    unsigned char **outbytes, unsigned int *outbitpos);
 
 /*
  * Feed some data into decoder.  The size is given in bits, the data
