@@ -277,16 +277,6 @@ reinit_convdecode_i(struct convcode *ce, bool tail_bite,
 	    for (i = 0; i < ce->trelw; i++)
 		ce->tmptrel[i] = 0;
 	}
-	for (i = 0; i < ce->num_states; i++) {
-	    if (i == CONVCODE_DEFAULT_START_STATE) {
-		if (ce->trelmap)
-		    ce->trelmap[i] = 0;
-	    } else {
-		ce->prev_path_values[i] = CONVCODE_DEFAULT_INIT_OTHER_STATES;
-		if (ce->trelmap)
-		    ce->trelmap[i] = CONVCODE_PSTATE_SET_BIT(i, 1);
-	    }
-	}
     }
     ce->ctrellis = last_bits;
     ce->leftover_bits = 0;
